@@ -1,0 +1,7 @@
+node_modules/
+uploads/
+temp/
+*.log
+chromaprint-fpcalc-1.5.1-windows-x86_64/
+fpcalc.exe
+.vercel
