@@ -60,6 +60,9 @@ if (!process.env.PUBLIC_VIDEO_URL) {
 // Middleware
 app.use(cors(corsOptions));
 
+// Handle preflight OPTIONS requests explicitly
+app.options('*', cors(corsOptions));
+
 // Cookie parser middleware with proper secret
 app.use(cookieParser(process.env.SESSION_SECRET || 'your-secret-key'));
 
