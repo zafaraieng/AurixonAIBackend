@@ -11,14 +11,25 @@ import tiktokRoutes from './routes/tiktokRoutes.js';
 import aiRoutes from './routes/aiRoutes.js';
 import optimizeRoutes from './routes/optimizeRoutes.js';
 
-// Configure CORS. Prefer explicit CLIENT_URL env var in production; fallback to localhost for dev.
-const clientOrigin = process.env.CLIENT_URL || 'https://aurixon.vercel.app';
+// Configure CORS. Allow the deployed frontend explicitly
+const allowedOrigins = [
+  'https://aurixon.vercel.app',
+  process.env.CLIENT_URL,
+  'http://localhost:5173',
+  'http://localhost:3000'
+].filter(Boolean);
+
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow no-origin (e.g., server-to-server) or matching client origin
-    if (!origin || origin === clientOrigin) return callback(null, true);
+    // Allow no-origin (e.g., server-to-server, Postman, etc.)
+    if (!origin) return callback(null, true);
+
+    // Check if origin is in allowed list
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+
     // In dev, allow localhost origins
     if (process.env.NODE_ENV !== 'production' && /localhost/.test(origin)) return callback(null, true);
+
     // Otherwise block
     return callback(new Error('CORS policy: This origin is not allowed'), false);
   },
@@ -74,10 +85,10 @@ app.get('/api/check-video/:filename', (req, res) => {
   const { filename } = req.params;
   const videoPath = path.join(uploadsDir, filename);
   const publicUrl = `${process.env.PUBLIC_VIDEO_URL}/public/videos/${filename}`;
-  
+
   if (fs.existsSync(videoPath)) {
     const stats = fs.statSync(videoPath);
-    res.json({ 
+    res.json({
       exists: true,
       filename,
       publicUrl,
@@ -85,7 +96,7 @@ app.get('/api/check-video/:filename', (req, res) => {
       lastModified: stats.mtime
     });
   } else {
-    res.status(404).json({ 
+    res.status(404).json({
       exists: false,
       filename,
       searchedPath: videoPath,
@@ -114,7 +125,7 @@ app.get('/callback/tiktok', async (req, res, next) => {
     cookies: req.cookies,
     headers: req.headers
   });
-  
+
   // Set a temporary cookie to maintain session through the callback
   if (!req.cookies?.uid && req.query.state) {
     res.cookie('uid', req.query.state.split('_')[0], {
@@ -129,7 +140,7 @@ app.get('/callback/tiktok', async (req, res, next) => {
     // Handle TikTok-provided error
     const error = req.query.error_description || req.query.error;
     log('TikTok auth error:', error);
-  return res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=${encodeURIComponent(error)}`);
+    return res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=${encodeURIComponent(error)}`);
   }
 
   next();
