@@ -9,6 +9,7 @@ import { log, err } from '../utils/logger.js';
 import { convertToShorts } from '../utils/videoConverter.js';
 import fs from 'fs';
 import path from 'path';
+import { downloadFile } from '../utils/fileDownloader.js';
 
 export const createAndUpload = async (req, res) => {
   let tmpDir = '';
@@ -16,20 +17,23 @@ export const createAndUpload = async (req, res) => {
     // For development, use a default user ID if not authenticated
     const uid = req.cookies?.uid || 'dev-user-' + Date.now();
 
-    if (!req.files?.file) return res.status(400).json({ error: 'No video file uploaded' });
-    
+    // Check for file OR cloudinaryUrl
+    if (!req.files?.file && !req.body.cloudinaryUrl) {
+      return res.status(400).json({ error: 'No video file uploaded' });
+    }
+
     // Handle thumbnail if provided
     const thumbnailPath = req.files?.thumbnail ? req.files.thumbnail[0].path : null;
 
-    const { 
-      title = '', 
-      description = '', 
+    const {
+      title = '',
+      description = '',
       publishTime,
       platforms: platformsJson,
       privacyStatus = 'private',
       videoType = 'long'
     } = req.body;
-    
+
     const platforms = JSON.parse(platformsJson || '{}');
     const results = { youtube: null, facebook: null, instagram: null, tiktok: null, errors: [] };
 
@@ -43,9 +47,34 @@ export const createAndUpload = async (req, res) => {
     }
 
     // Create temp directory for platform-specific conversions
-    tmpDir = path.join(path.dirname(req.files.file[0].path), 'tmp_' + Date.now());
+    // Use a consistent temp dir base
+    const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(path.dirname(import.meta.url.replace('file://', '')), '../temp');
+    // Ensure base temp dir exists
+    if (!fs.existsSync(baseTmpDir)) {
+      try { fs.mkdirSync(baseTmpDir, { recursive: true }); } catch (e) { /* ignore */ }
+    }
+
+    tmpDir = path.join(baseTmpDir, 'tmp_' + Date.now());
     if (!fs.existsSync(tmpDir)) {
       fs.mkdirSync(tmpDir, { recursive: true });
+    }
+
+    // Handle Cloudinary Download if applicable
+    if (req.body.cloudinaryUrl) {
+      log('Downloading from Cloudinary:', req.body.cloudinaryUrl);
+      const originalName = req.body.originalFilename || 'downloaded_video.mp4';
+      const tempFilePath = path.join(tmpDir, originalName);
+
+      await downloadFile(req.body.cloudinaryUrl, tempFilePath);
+
+      // Mock the req.files.file structure so the rest of the code works as is
+      if (!req.files) req.files = {};
+      req.files.file = [{
+        path: tempFilePath,
+        originalname: originalName,
+        mimetype: 'video/mp4', // Assumption, but usually safe for this flow
+        size: fs.statSync(tempFilePath).size
+      }];
     }
 
     // Initialize platform statuses with proper status tracking
@@ -118,7 +147,7 @@ export const createAndUpload = async (req, res) => {
           // Get video file and thumbnail
           const videoFile = req.files.file[0];
           const videoPath = videoFile.path;
-          
+
           const result = await uploadToYouTube(uid, videoPath, {
             title,
             description,
@@ -136,7 +165,7 @@ export const createAndUpload = async (req, res) => {
               thumbnailUrl: result.thumbnailUrl || `https://i.ytimg.com/vi/${result.videoId}/maxresdefault.jpg`,
               status: result.status
             };
-            
+
             video.platformStatus.youtube = {
               connected: true,
               status: 'published',
@@ -156,19 +185,19 @@ export const createAndUpload = async (req, res) => {
 
                 if (videoDetails.data.items?.[0]) {
                   const latestThumbnails = videoDetails.data.items[0].snippet.thumbnails;
-                  const bestThumbnail = latestThumbnails.maxres || 
-                                      latestThumbnails.standard ||
-                                      latestThumbnails.high ||
-                                      latestThumbnails.default;
-                  
-                  video.platformStatus.youtube.thumbnailUrl = bestThumbnail?.url || 
+                  const bestThumbnail = latestThumbnails.maxres ||
+                    latestThumbnails.standard ||
+                    latestThumbnails.high ||
+                    latestThumbnails.default;
+
+                  video.platformStatus.youtube.thumbnailUrl = bestThumbnail?.url ||
                     `https://i.ytimg.com/vi/${result.videoId}/maxresdefault.jpg`;
                 }
               }
             } catch (verifyError) {
               log('Error verifying video upload:', verifyError);
             }
-            
+
             video.publishedAt = new Date();
             await video.save();
             log('YouTube upload verified and complete. Video ID:', result.videoId);
@@ -181,12 +210,12 @@ export const createAndUpload = async (req, res) => {
             status: 'failed'
           };
           video.errorMessage = `YouTube: ${e.message}`;
-          
+
           if (selectedPlatforms.length === 1) {
             video.status = 'failed';
           }
           await video.save();
-          
+
           results.errors.push(`YouTube: ${e.message}`);
           err('YouTube upload error:', e);
         }
@@ -206,10 +235,10 @@ export const createAndUpload = async (req, res) => {
             log('Multiple platforms selected, waiting for previous operations...');
             await new Promise(resolve => setTimeout(resolve, 5000));
           }
-          
-          const igResult = await InstagramService.uploadToInstagram(uid, req.files.file[0].path, { 
-            title, 
-            description, 
+
+          const igResult = await InstagramService.uploadToInstagram(uid, req.files.file[0].path, {
+            title,
+            description,
             publishTime,
             convertedSuffix: '_ig',
             userId: uid,
@@ -232,7 +261,7 @@ export const createAndUpload = async (req, res) => {
               video.status = 'published';
             }
             await video.save();
-            
+
             if (igResult.note) {
               log('Instagram upload note:', igResult.note);
             }
@@ -256,9 +285,9 @@ export const createAndUpload = async (req, res) => {
       if (platforms.facebook) {
         try {
           log('Uploading to Facebook...');
-          const fbResult = await uploadToFacebook(uid, req.files.file[0].path, { 
-            title, 
-            description, 
+          const fbResult = await uploadToFacebook(uid, req.files.file[0].path, {
+            title,
+            description,
             publishTime,
             convertedSuffix: '_fb'
           });
@@ -277,18 +306,18 @@ export const createAndUpload = async (req, res) => {
       if (platforms.tiktok) {
         try {
           log('Starting TikTok upload process...');
-          const tiktokResult = await uploadToTikTok(uid, req.files.file[0].path, { 
-            title, 
+          const tiktokResult = await uploadToTikTok(uid, req.files.file[0].path, {
+            title,
             description
           });
-          
+
           results.tiktok = {
             status: tiktokResult.status,
             publishId: tiktokResult.publishId,
             uploadStatus: tiktokResult.uploadStatus,
             message: tiktokResult.message
           };
-          
+
           log('TikTok upload completed:', tiktokResult);
         } catch (e) {
           results.errors.push(`TikTok: ${e.message}`);
@@ -299,11 +328,11 @@ export const createAndUpload = async (req, res) => {
       // Update final statuses
       const successfulUploads = selectedPlatforms.filter(platform => results[platform] !== null);
       video.status = successfulUploads.length === 0 ? 'failed' : 'published';
-      
+
       video.errorMessage = results.errors
         .filter(error => selectedPlatforms.some(platform => error.startsWith(platform)))
         .join('; ');
-      
+
       if (results.youtube) {
         video.youtubeVideoId = results.youtube.id;
         video.youtubeThumbnailUrl = results.youtube.thumbnailUrl;
@@ -318,7 +347,7 @@ export const createAndUpload = async (req, res) => {
           message: results.tiktok.message
         };
       }
-      
+
       video.platform = selectedPlatforms.length > 1 ? 'multi' : selectedPlatforms[0];
       await video.save();
 
@@ -353,8 +382,8 @@ export const createAndUpload = async (req, res) => {
       files: req.files
     });
     err('Upload controller error:', e);
-    res.status(500).json({ 
-      error: 'Upload failed', 
+    res.status(500).json({
+      error: 'Upload failed',
       details: e.message,
       technical: process.env.NODE_ENV === 'development' ? e.stack : undefined
     });
@@ -365,7 +394,7 @@ export const listUploads = async (req, res) => {
   try {
     const uid = req.cookies?.uid;
     if (!uid) return res.status(401).json({ error: 'Not authenticated' });
-    
+
     const items = await VideoSchedule.find({ userId: uid })
       .sort({ createdAt: -1 })
       .lean();

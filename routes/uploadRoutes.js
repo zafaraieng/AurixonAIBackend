@@ -16,10 +16,10 @@ import VideoSchedule from '../models/VideoSchedule.js';
 import User from '../models/User.js';
 import { keys } from '../config/keys.js';
 import {
-    createAndUpload,
-    listUploads,
-    deleteUpload,
-    editUpload
+  createAndUpload,
+  listUploads,
+  deleteUpload,
+  editUpload
 } from '../controllers/uploadController.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -45,41 +45,41 @@ const youtubeMatcher = new YoutubeContentMatcher(keys.youtube?.apiKey);
 
 // Configure multer for video and thumbnail uploads
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        const uploadsDir = process.env.VERCEL ? '/tmp/uploads' : path.join(__dirname, '../uploads');
-        cb(null, uploadsDir);
-    },
-    filename: (req, file, cb) => {
-        const uniqueName = crypto
-            .createHash('md5')
-            .update(file.originalname + Date.now())
-            .digest('hex');
-        cb(null, uniqueName);
-    }
+  destination: (req, file, cb) => {
+    const uploadsDir = process.env.VERCEL ? '/tmp/uploads' : path.join(__dirname, '../uploads');
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueName = crypto
+      .createHash('md5')
+      .update(file.originalname + Date.now())
+      .digest('hex');
+    cb(null, uniqueName);
+  }
 });
 
 // Configure multer upload with file type validation
 const fileFilter = (req, file, cb) => {
-    const allowedVideoTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-ms-wmv'];
-    const allowedImageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/avif', 'image/webp'];
-    
-    if (file.fieldname === 'file' && allowedVideoTypes.includes(file.mimetype)) {
-        cb(null, true);
-    } else if (file.fieldname === 'thumbnail' && allowedImageTypes.includes(file.mimetype)) {
-        cb(null, true);
-    } else {
-        cb(null, false);
-        console.log(`Rejected file: ${file.fieldname} ${file.mimetype}`);
-    }
+  const allowedVideoTypes = ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-ms-wmv'];
+  const allowedImageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/avif', 'image/webp'];
+
+  if (file.fieldname === 'file' && allowedVideoTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else if (file.fieldname === 'thumbnail' && allowedImageTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(null, false);
+    console.log(`Rejected file: ${file.fieldname} ${file.mimetype}`);
+  }
 };
 
 // Initialize multer upload middleware
 const upload = multer({
-    storage: storage,
-    fileFilter: fileFilter,
-    limits: {
-        fileSize: 1024 * 1024 * 100 // 100MB limit
-    }
+  storage: storage,
+  fileFilter: fileFilter,
+  limits: {
+    fileSize: 1024 * 1024 * 100 // 100MB limit
+  }
 });
 
 // Content validation endpoint
@@ -91,10 +91,10 @@ router.post('/validate', upload.single('file'), async (req, res) => {
 
     console.log('Validating file:', req.file);
     const absolutePath = req.file.path;
-    
+
     // Perform comprehensive content analysis
     const analysisResults = await contentAnalysis.analyzeContent(absolutePath);
-    
+
     // Check for copyright matches in database
     const fingerprint = await ContentFingerprint.findOne({
       $or: [
@@ -103,7 +103,7 @@ router.post('/validate', upload.single('file'), async (req, res) => {
       ]
     });
 
-  // Build copyright match info preferring DB fingerprint, then analyzer results
+    // Build copyright match info preferring DB fingerprint, then analyzer results
     let copyrightMatch = { found: false };
     if (fingerprint) {
       const analysisAudioMatch = analysisResults?.technicalAnalysis?.audio?.matches?.[0];
@@ -201,7 +201,7 @@ router.post('/validate', upload.single('file'), async (req, res) => {
       let userId = req.user?.id;
       if (!userId) {
         // Try to find existing system user
-  let systemUser = await User.findOne({ email: 'system@aurixon.ai' });
+        let systemUser = await User.findOne({ email: 'system@aurixon.ai' });
         if (!systemUser) {
           // Create system user if it doesn't exist
           systemUser = new User({
@@ -243,7 +243,7 @@ router.post('/validate', upload.single('file'), async (req, res) => {
       stack: error.stack,
       name: error.name
     });
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Error validating content',
       details: error.message,
       type: error.name
@@ -258,25 +258,26 @@ const uploadFields = upload.fields([
 ]);
 
 router.post('/uploads', validateInstagramAuth, uploadFields, async (req, res) => {
-    try {
-        if (!req.files?.file?.[0]) {
-            return res.status(400).json({ error: 'No video file uploaded' });
-        }
-
-        // Pass control to createAndUpload with the uploaded files
-        await createAndUpload(req, res);
-    } catch (error) {
-        console.error('Error in upload route:', {
-            error,
-            message: error.message,
-            stack: error.stack,
-            files: req.files
-        });
-        res.status(500).json({ 
-            error: error.message || 'Internal Server Error',
-            details: process.env.NODE_ENV === 'development' ? error.stack : undefined 
-        });
+  try {
+    // Allow if file is uploaded OR if cloudinaryUrl is provided
+    if (!req.files?.file?.[0] && !req.body.cloudinaryUrl) {
+      return res.status(400).json({ error: 'No video file uploaded or Cloudinary URL provided' });
     }
+
+    // Pass control to createAndUpload with the uploaded files
+    await createAndUpload(req, res);
+  } catch (error) {
+    console.error('Error in upload route:', {
+      error,
+      message: error.message,
+      stack: error.stack,
+      files: req.files
+    });
+    res.status(500).json({
+      error: error.message || 'Internal Server Error',
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  }
 });
 
 // management endpoints used by frontend
