@@ -108,374 +108,441 @@ export const createAndUpload = async (req, res) => {
               platformStatus.instagram.connected = connected;
               if (!connected) {
                 log('Instagram not connected:', error || 'No valid Instagram authentication');
-                const video = new VideoSchedule({
-                  userId: uid,
-                  platform: selectedPlatforms.length > 1 ? 'multi' : selectedPlatforms[0],
-                  title: title || 'Untitled',
-                  description: description || '',
-                  scheduledAt: publishTime ? new Date(publishTime) : new Date(),
-                  status: 'processing',
-                  thumbnail: thumbnailPath ? {
-                    path: thumbnailPath,
-                    url: `/uploads/${path.basename(thumbnailPath)}`
-                  } : null,
-                  filePath: req.files.file[0].path,
-                  platformStatus // Use the new platform status structure
-                });
-                await video.save();
+              }
+            } catch (error) {
+              log('Error checking Instagram connection:', error);
+              platformStatus.instagram.connected = false;
+            }
+            break;
+          case 'facebook':
+            try {
+              // Facebook uses the same token as Instagram (it's a page token)
+              const user = await User.findById(uid).select('instagram');
+              if (user?.instagram?.accessToken && user?.instagram?.pageId) {
+                platformStatus.facebook.connected = true;
+              } else {
+                platformStatus.facebook.connected = false;
+                log('Facebook not connected: Missing access token or page ID');
+              }
+            } catch (error) {
+              log('Error checking Facebook connection:', error);
+              platformStatus.facebook.connected = false;
+            }
+            break;
+          case 'tiktok':
+            try {
+              const user = await User.findById(uid).select('tiktok');
+              if (user?.tiktok?.accessToken) {
+                // Check for required scopes
+                const requiredScopes = ['video.upload'];
+                const userScopes = (user.tiktok.scope || '').split(/[,\s]+/).filter(Boolean);
+                const hasScope = requiredScopes.every(scope => userScopes.includes(scope));
 
-                try {
-                  // Upload to YouTube first if selected (it handles thumbnails)
-                  if (platforms.youtube) {
-                    try {
-                      // Get video file and thumbnail
-                      const videoFile = req.files.file[0];
-                      const videoPath = videoFile.path;
-
-                      const result = await uploadToYouTube(uid, videoPath, {
-                        title,
-                        description,
-                        privacyStatus: privacyStatus || 'public',
-                        publishAt: publishTime,
-                        videoType: 'long',
-                        tags: [],
-                        thumbnailPath: thumbnailPath,
-                        multiPlatform: Object.values(platforms).filter(Boolean).length > 1
-                      });
-
-                      if (result && result.videoId) {
-                        results.youtube = {
-                          id: result.videoId,
-                          thumbnailUrl: result.thumbnailUrl || `https://i.ytimg.com/vi/${result.videoId}/maxresdefault.jpg`,
-                          status: result.status
-                        };
-
-                        video.platformStatus.youtube = {
-                          connected: true,
-                          status: 'published',
-                          videoId: result.videoId,
-                          thumbnailUrl: result.thumbnailUrl || `https://i.ytimg.com/vi/${result.videoId}/maxresdefault.jpg`
-                        };
-
-                        // Verify the upload
-                        try {
-                          const user = await User.findById(uid);
-                          if (user?.refreshToken) {
-                            const youtube = await getYouTubeClient(user.refreshToken);
-                            const videoDetails = await youtube.videos.list({
-                              part: ['status', 'snippet'],
-                              id: result.videoId
-                            });
-
-                            if (videoDetails.data.items?.[0]) {
-                              const latestThumbnails = videoDetails.data.items[0].snippet.thumbnails;
-                              const bestThumbnail = latestThumbnails.maxres ||
-                                latestThumbnails.standard ||
-                                latestThumbnails.high ||
-                                latestThumbnails.default;
-
-                              video.platformStatus.youtube.thumbnailUrl = bestThumbnail?.url ||
-                                `https://i.ytimg.com/vi/${result.videoId}/maxresdefault.jpg`;
-                            }
-                          }
-                        } catch (verifyError) {
-                          log('Error verifying video upload:', verifyError);
-                        }
-
-                        video.publishedAt = new Date();
-                        await video.save();
-                        log('YouTube upload verified and complete. Video ID:', result.videoId);
-                      } else {
-                        throw new Error('Upload failed: Invalid response from YouTube');
-                      }
-                    } catch (e) {
-                      video.platformStatus.youtube = {
-                        ...video.platformStatus.youtube,
-                        status: 'failed'
-                      };
-                      video.errorMessage = `YouTube: ${e.message}`;
-
-                      if (selectedPlatforms.length === 1) {
-                        video.status = 'failed';
-                      }
-                      await video.save();
-
-                      results.errors.push(`YouTube: ${e.message}`);
-                      err('YouTube upload error:', e);
-                    }
-                  }
-
-                  // Process Instagram next
-                  if (platforms.instagram) {
-                    if (!platformStatus.instagram.connected) {
-                      log('Skipping Instagram upload: Not connected');
-                      video.platformStatus.instagram = {
-                        status: 'failed',
-                        error: 'Account not connected'
-                      };
-                      results.errors.push('Instagram: Account not connected');
-                    } else {
-                      try {
-                        log('Uploading to Instagram...');
-                        const igSession = await InstagramService.verifySession(uid);
-                        if (!igSession) {
-                          throw new Error('Instagram session not found or expired');
-                        }
-
-                        // For multi-platform uploads, wait for previous operations
-                        if (Object.values(platforms).filter(Boolean).length > 1) {
-                          log('Multiple platforms selected, waiting for previous operations...');
-                          await new Promise(resolve => setTimeout(resolve, 5000));
-                        }
-
-                        const igResult = await InstagramService.uploadToInstagram(uid, req.files.file[0].path, {
-                          title,
-                          description,
-                          publishTime,
-                          convertedSuffix: '_ig',
-                          userId: uid,
-                          mediaType: 'REELS',
-                          ignoreThumbnail: true,
-                          multiPlatform: Object.values(platforms).filter(Boolean).length > 1
-                        });
-
-                        if (igResult?.id) {
-                          results.instagram = igResult.id;
-                          video.instagramMediaId = igResult.id;
-                          video.instagramStatus = 'published';
-                          video.platformStatus.instagram = {
-                            ...video.platformStatus.instagram,
-                            status: 'published',
-                            mediaId: igResult.id
-                          };
-
-                          if (selectedPlatforms.length === 1) {
-                            video.status = 'published';
-                          }
-                          await video.save();
-
-                          if (igResult.note) {
-                            log('Instagram upload note:', igResult.note);
-                          }
-                          log('Instagram upload complete. Media ID:', igResult.id);
-                        } else {
-                          throw new Error('Instagram upload failed: No media ID returned');
-                        }
-                      } catch (e) {
-                        video.platformStatus.instagram = {
-                          ...video.platformStatus.instagram,
-                          status: 'failed',
-                          error: e.message
-                        };
-                        await video.save();
-                        results.errors.push(`Instagram: ${e.message}`);
-                        err('Instagram upload error:', e);
-                      }
-                    }
-                  }
-
-                  // Process Facebook last
-                  if (platforms.facebook) {
-                    try {
-                      log('Uploading to Facebook...');
-                      const fbResult = await uploadToFacebook(uid, req.files.file[0].path, {
-                        title,
-                        description,
-                        publishTime,
-                        convertedSuffix: '_fb'
-                      });
-                      results.facebook = fbResult.id;
-                      if (fbResult.note) {
-                        log('Facebook upload note:', fbResult.note);
-                      }
-                      log('Facebook upload complete. Post ID:', fbResult.id);
-                    } catch (e) {
-                      results.errors.push(`Facebook: ${e.message}`);
-                      err('Facebook upload error:', e);
-                      video.platformStatus.facebook = {
-                        status: 'failed',
-                        error: e.message
-                      };
-                      await video.save();
-                    }
-                  }
-
-                  // Process TikTok
-                  if (platforms.tiktok) {
-                    try {
-                      log('Starting TikTok upload process...');
-                      const tiktokResult = await uploadToTikTok(uid, req.files.file[0].path, {
-                        title,
-                        description
-                      });
-
-                      results.tiktok = {
-                        status: tiktokResult.status,
-                        publishId: tiktokResult.publishId,
-                        uploadStatus: tiktokResult.uploadStatus,
-                        message: tiktokResult.message
-                      };
-
-                      log('TikTok upload completed:', tiktokResult);
-                    } catch (e) {
-                      results.errors.push(`TikTok: ${e.message}`);
-                      err('TikTok upload error:', e);
-                      video.platformStatus.tiktok = {
-                        status: 'failed',
-                        error: e.message
-                      };
-                      await video.save();
-                    }
-                  }
-
-                  // Update final statuses
-                  const successfulUploads = selectedPlatforms.filter(platform => results[platform] !== null);
-                  video.status = successfulUploads.length === 0 ? 'failed' : 'published';
-
-                  video.errorMessage = results.errors
-                    .filter(error => selectedPlatforms.some(platform => error.startsWith(platform)))
-                    .join('; ');
-
-                  if (results.youtube) {
-                    video.youtubeVideoId = results.youtube.id;
-                    video.youtubeThumbnailUrl = results.youtube.thumbnailUrl;
-                  }
-                  video.facebookPostId = results.facebook;
-                  video.instagramMediaId = results.instagram;
-
-                  if (results.tiktok) {
-                    video.tiktokData = {
-                      status: 'redirect',
-                      url: results.tiktok.url,
-                      message: results.tiktok.message
-                    };
-                  }
-
-                  video.platform = selectedPlatforms.length > 1 ? 'multi' : selectedPlatforms[0];
-                  await video.save();
-
-                  res.json({
-                    video,
-                    tiktok: results.tiktok
-                  });
-                } finally {
-                  // Clean up temp directory
-                  try {
-                    if (tmpDir && fs.existsSync(tmpDir)) {
-                      fs.rmSync(tmpDir, { recursive: true, force: true });
-                    }
-                  } catch (cleanupError) {
-                    log('Error cleaning up temp directory:', cleanupError);
-                  }
+                if (hasScope) {
+                  platformStatus.tiktok.connected = true;
+                } else {
+                  platformStatus.tiktok.connected = false;
+                  log('TikTok connected but missing required scopes:', requiredScopes);
                 }
-              } catch (e) {
-                // Clean up temp directory on error
-                try {
-                  if (tmpDir && fs.existsSync(tmpDir)) {
-                    fs.rmSync(tmpDir, { recursive: true, force: true });
-                  }
-                } catch (cleanupError) {
-                  log('Error cleaning up temp directory:', cleanupError);
-                }
+              } else {
+                platformStatus.tiktok.connected = false;
+                log('TikTok not connected: Missing access token');
+              }
+            } catch (error) {
+              log('Error checking TikTok connection:', error);
+              platformStatus.tiktok.connected = false;
+            }
+            break;
+        }
+      }
+    }
 
-                console.error('Upload controller error:', {
-                  error: e,
-                  message: e.message,
-                  stack: e.stack,
-                  files: req.files
+    const video = new VideoSchedule({
+      userId: uid,
+      platform: selectedPlatforms.length > 1 ? 'multi' : selectedPlatforms[0],
+      title: title || 'Untitled',
+      description: description || '',
+      scheduledAt: publishTime ? new Date(publishTime) : new Date(),
+      status: 'processing',
+      thumbnail: thumbnailPath ? {
+        path: thumbnailPath,
+        url: `/uploads/${path.basename(thumbnailPath)}`
+      } : null,
+      filePath: req.files.file[0].path,
+      platformStatus // Use the new platform status structure
+    });
+    await video.save();
+
+    try {
+      // Upload to YouTube first if selected (it handles thumbnails)
+      if (platforms.youtube) {
+        try {
+          // Get video file and thumbnail
+          const videoFile = req.files.file[0];
+          const videoPath = videoFile.path;
+
+          const result = await uploadToYouTube(uid, videoPath, {
+            title,
+            description,
+            privacyStatus: privacyStatus || 'public',
+            publishAt: publishTime,
+            videoType: 'long',
+            tags: [],
+            thumbnailPath: thumbnailPath,
+            multiPlatform: Object.values(platforms).filter(Boolean).length > 1
+          });
+
+          if (result && result.videoId) {
+            results.youtube = {
+              id: result.videoId,
+              thumbnailUrl: result.thumbnailUrl || `https://i.ytimg.com/vi/${result.videoId}/maxresdefault.jpg`,
+              status: result.status
+            };
+
+            video.platformStatus.youtube = {
+              connected: true,
+              status: 'published',
+              videoId: result.videoId,
+              thumbnailUrl: result.thumbnailUrl || `https://i.ytimg.com/vi/${result.videoId}/maxresdefault.jpg`
+            };
+
+            // Verify the upload
+            try {
+              const user = await User.findById(uid);
+              if (user?.refreshToken) {
+                const youtube = await getYouTubeClient(user.refreshToken);
+                const videoDetails = await youtube.videos.list({
+                  part: ['status', 'snippet'],
+                  id: result.videoId
                 });
-                err('Upload controller error:', e);
-                res.status(500).json({
-                  error: 'Upload failed',
-                  details: e.message,
-                  technical: process.env.NODE_ENV === 'development' ? e.stack : undefined
-                });
-              }
-            };
 
-            export const listUploads = async (req, res) => {
-              try {
-                const uid = req.cookies?.uid;
-                if (!uid) return res.status(401).json({ error: 'Not authenticated' });
+                if (videoDetails.data.items?.[0]) {
+                  const latestThumbnails = videoDetails.data.items[0].snippet.thumbnails;
+                  const bestThumbnail = latestThumbnails.maxres ||
+                    latestThumbnails.standard ||
+                    latestThumbnails.high ||
+                    latestThumbnails.default;
 
-                const items = await VideoSchedule.find({ userId: uid })
-                  .sort({ createdAt: -1 })
-                  .lean();
-
-                const transformedItems = items.map(item => ({
-                  ...item,
-                  platformStatus: {
-                    youtube: {
-                      status: item.platformStatus?.youtube?.status || (item.youtubeVideoId ? 'published' : (item.platform === 'youtube' ? item.status : 'not_selected')),
-                      uploadStatus: item.platformStatus?.youtube?.uploadStatus || (item.youtubeVideoId ? 'processed' : undefined),
-                      videoId: item.youtubeVideoId || item.platformStatus?.youtube?.videoId || undefined,
-                      thumbnailUrl: item.youtubeThumbnailUrl || item.platformStatus?.youtube?.thumbnailUrl || undefined,
-                      error: item.platformStatus?.youtube?.error || null,
-                      connected: item.platformStatus?.youtube?.connected ?? Boolean(item.youtubeVideoId)
-                    },
-                    facebook: {
-                      status: item.platformStatus?.facebook?.status || (item.facebookPostId ? 'published' : (item.platform === 'facebook' ? item.status : 'not_selected')),
-                      postId: item.facebookPostId || item.platformStatus?.facebook?.postId || undefined,
-                      error: item.platformStatus?.facebook?.error || null,
-                      connected: item.platformStatus?.facebook?.connected ?? Boolean(item.facebookPostId)
-                    },
-                    instagram: {
-                      status: item.platformStatus?.instagram?.status || (item.instagramMediaId ? 'published' : (item.platform === 'instagram' ? item.status : 'not_selected')),
-                      mediaId: item.instagramMediaId || item.platformStatus?.instagram?.mediaId || undefined,
-                      error: item.platformStatus?.instagram?.error || null,
-                      connected: item.platformStatus?.instagram?.connected ?? Boolean(item.instagramMediaId)
-                    },
-                    tiktok: {
-                      status: item.platformStatus?.tiktok?.status || (item.tiktokData ? 'draft' : (item.platform === 'tiktok' ? item.status : 'not_selected')),
-                      videoId: item.platformStatus?.tiktok?.videoId || undefined,
-                      error: item.platformStatus?.tiktok?.error || null,
-                      connected: item.platformStatus?.tiktok?.connected ?? Boolean(item.tiktokData)
-                    }
-                  },
-                  tiktokDraftUrl: item.tiktokData?.draftUrl
-                }));
-
-                res.json(transformedItems);
-              } catch (e) {
-                err('listUploads error', e);
-                res.status(500).json({ error: 'Failed to fetch uploads', details: e.message });
-              }
-            };
-
-            export const deleteUpload = async (req, res) => {
-              try {
-                const uid = req.cookies?.uid;
-                if (!uid) return res.status(401).json({ error: 'Not authenticated' });
-                const { id } = req.params;
-                const deleted = await VideoSchedule.findOneAndDelete({ _id: id, userId: uid });
-                if (!deleted) return res.status(404).json({ error: 'Upload not found' });
-
-                if (deleted.filePath) {
-                  try { fs.unlinkSync(deleted.filePath); } catch (_) { /* ignore */ }
+                  video.platformStatus.youtube.thumbnailUrl = bestThumbnail?.url ||
+                    `https://i.ytimg.com/vi/${result.videoId}/maxresdefault.jpg`;
                 }
-
-                res.json({ ok: true });
-              } catch (e) {
-                err('deleteUpload error', e);
-                res.status(500).json({ error: 'Failed to delete upload', details: e.message });
               }
+            } catch (verifyError) {
+              log('Error verifying video upload:', verifyError);
+            }
+
+            video.publishedAt = new Date();
+            await video.save();
+            log('YouTube upload verified and complete. Video ID:', result.videoId);
+          } else {
+            throw new Error('Upload failed: Invalid response from YouTube');
+          }
+        } catch (e) {
+          video.platformStatus.youtube = {
+            ...video.platformStatus.youtube,
+            status: 'failed'
+          };
+          video.errorMessage = `YouTube: ${e.message}`;
+
+          if (selectedPlatforms.length === 1) {
+            video.status = 'failed';
+          }
+          await video.save();
+
+          results.errors.push(`YouTube: ${e.message}`);
+          err('YouTube upload error:', e);
+        }
+      }
+
+      // Process Instagram next
+      if (platforms.instagram) {
+        if (!platformStatus.instagram.connected) {
+          log('Skipping Instagram upload: Not connected');
+          video.platformStatus.instagram = {
+            status: 'failed',
+            error: 'Account not connected'
+          };
+          results.errors.push('Instagram: Account not connected');
+        } else {
+          try {
+            log('Uploading to Instagram...');
+            const igSession = await InstagramService.verifySession(uid);
+            if (!igSession) {
+              throw new Error('Instagram session not found or expired');
+            }
+
+            // For multi-platform uploads, wait for previous operations
+            if (Object.values(platforms).filter(Boolean).length > 1) {
+              log('Multiple platforms selected, waiting for previous operations...');
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+
+            const igResult = await InstagramService.uploadToInstagram(uid, req.files.file[0].path, {
+              title,
+              description,
+              publishTime,
+              convertedSuffix: '_ig',
+              userId: uid,
+              mediaType: 'REELS',
+              ignoreThumbnail: true,
+              multiPlatform: Object.values(platforms).filter(Boolean).length > 1
+            });
+
+            if (igResult?.id) {
+              results.instagram = igResult.id;
+              video.instagramMediaId = igResult.id;
+              video.instagramStatus = 'published';
+              video.platformStatus.instagram = {
+                ...video.platformStatus.instagram,
+                status: 'published',
+                mediaId: igResult.id
+              };
+
+              if (selectedPlatforms.length === 1) {
+                video.status = 'published';
+              }
+              await video.save();
+
+              if (igResult.note) {
+                log('Instagram upload note:', igResult.note);
+              }
+              log('Instagram upload complete. Media ID:', igResult.id);
+            } else {
+              throw new Error('Instagram upload failed: No media ID returned');
+            }
+          } catch (e) {
+            video.platformStatus.instagram = {
+              ...video.platformStatus.instagram,
+              status: 'failed',
+              error: e.message
+            };
+            await video.save();
+            results.errors.push(`Instagram: ${e.message}`);
+            err('Instagram upload error:', e);
+          }
+        }
+      }
+
+      // Process Facebook last
+      if (platforms.facebook) {
+        if (!platformStatus.facebook.connected) {
+          log('Skipping Facebook upload: Not connected');
+          video.platformStatus.facebook = {
+            status: 'failed',
+            error: 'Account not connected'
+          };
+          results.errors.push('Facebook: Account not connected');
+        } else {
+          try {
+            log('Uploading to Facebook...');
+            const fbResult = await uploadToFacebook(uid, req.files.file[0].path, {
+              title,
+              description,
+              publishTime,
+              convertedSuffix: '_fb'
+            });
+            results.facebook = fbResult.id;
+            if (fbResult.note) {
+              log('Facebook upload note:', fbResult.note);
+            }
+            log('Facebook upload complete. Post ID:', fbResult.id);
+          } catch (e) {
+            results.errors.push(`Facebook: ${e.message}`);
+            err('Facebook upload error:', e);
+            video.platformStatus.facebook = {
+              status: 'failed',
+              error: e.message
+            };
+            await video.save();
+          }
+        }
+      }
+
+      // Process TikTok
+      if (platforms.tiktok) {
+        if (!platformStatus.tiktok.connected) {
+          log('Skipping TikTok upload: Not connected');
+          video.platformStatus.tiktok = {
+            status: 'failed',
+            error: 'Account not connected'
+          };
+          results.errors.push('TikTok: Account not connected');
+        } else {
+          try {
+            log('Starting TikTok upload process...');
+            const tiktokResult = await uploadToTikTok(uid, req.files.file[0].path, {
+              title,
+              description
+            });
+
+            results.tiktok = {
+              status: tiktokResult.status,
+              publishId: tiktokResult.publishId,
+              uploadStatus: tiktokResult.uploadStatus,
+              message: tiktokResult.message
             };
 
-            export const editUpload = async (req, res) => {
-              try {
-                const uid = req.cookies?.uid;
-                if (!uid) return res.status(401).json({ error: 'Not authenticated' });
-                const { id } = req.params;
-                const { title, description, scheduledTime } = req.body;
-                const updated = await VideoSchedule.findOneAndUpdate(
-                  { _id: id, user: uid },
-                  { title, description, scheduledTime },
-                  { new: true }
-                ).lean();
-                if (!updated) return res.status(404).json({ error: 'Upload not found' });
-                res.json(updated);
-              } catch (e) {
-                err('editUpload error', e);
-                res.status(500).json({ error: 'Failed to edit upload', details: e.message });
-              }
+            log('TikTok upload completed:', tiktokResult);
+          } catch (e) {
+            results.errors.push(`TikTok: ${e.message}`);
+            err('TikTok upload error:', e);
+            video.platformStatus.tiktok = {
+              status: 'failed',
+              error: e.message
             };
+            await video.save();
+          }
+        }
+      }
+
+      // Update final statuses
+      const successfulUploads = selectedPlatforms.filter(platform => results[platform] !== null);
+      video.status = successfulUploads.length === 0 ? 'failed' : 'published';
+
+      video.errorMessage = results.errors
+        .filter(error => selectedPlatforms.some(platform => error.startsWith(platform)))
+        .join('; ');
+
+      if (results.youtube) {
+        video.youtubeVideoId = results.youtube.id;
+        video.youtubeThumbnailUrl = results.youtube.thumbnailUrl;
+      }
+      video.facebookPostId = results.facebook;
+      video.instagramMediaId = results.instagram;
+
+      if (results.tiktok) {
+        video.tiktokData = {
+          status: 'redirect',
+          url: results.tiktok.url,
+          message: results.tiktok.message
+        };
+      }
+
+      video.platform = selectedPlatforms.length > 1 ? 'multi' : selectedPlatforms[0];
+      await video.save();
+
+      res.json({
+        video,
+        tiktok: results.tiktok
+      });
+    } finally {
+      // Clean up temp directory
+      try {
+        if (tmpDir && fs.existsSync(tmpDir)) {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+      } catch (cleanupError) {
+        log('Error cleaning up temp directory:', cleanupError);
+      }
+    }
+  } catch (e) {
+    // Clean up temp directory on error
+    try {
+      if (tmpDir && fs.existsSync(tmpDir)) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } catch (cleanupError) {
+      log('Error cleaning up temp directory:', cleanupError);
+    }
+
+    console.error('Upload controller error:', {
+      error: e,
+      message: e.message,
+      stack: e.stack,
+      files: req.files
+    });
+    err('Upload controller error:', e);
+    res.status(500).json({
+      error: 'Upload failed',
+      details: e.message,
+      technical: process.env.NODE_ENV === 'development' ? e.stack : undefined
+    });
+  }
+};
+
+export const listUploads = async (req, res) => {
+  try {
+    const uid = req.cookies?.uid;
+    if (!uid) return res.status(401).json({ error: 'Not authenticated' });
+
+    const items = await VideoSchedule.find({ userId: uid })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const transformedItems = items.map(item => ({
+      ...item,
+      platformStatus: {
+        youtube: {
+          status: item.platformStatus?.youtube?.status || (item.youtubeVideoId ? 'published' : (item.platform === 'youtube' ? item.status : 'not_selected')),
+          uploadStatus: item.platformStatus?.youtube?.uploadStatus || (item.youtubeVideoId ? 'processed' : undefined),
+          videoId: item.youtubeVideoId || item.platformStatus?.youtube?.videoId || undefined,
+          thumbnailUrl: item.youtubeThumbnailUrl || item.platformStatus?.youtube?.thumbnailUrl || undefined,
+          error: item.platformStatus?.youtube?.error || null,
+          connected: item.platformStatus?.youtube?.connected ?? Boolean(item.youtubeVideoId)
+        },
+        facebook: {
+          status: item.platformStatus?.facebook?.status || (item.facebookPostId ? 'published' : (item.platform === 'facebook' ? item.status : 'not_selected')),
+          postId: item.facebookPostId || item.platformStatus?.facebook?.postId || undefined,
+          error: item.platformStatus?.facebook?.error || null,
+          connected: item.platformStatus?.facebook?.connected ?? Boolean(item.facebookPostId)
+        },
+        instagram: {
+          status: item.platformStatus?.instagram?.status || (item.instagramMediaId ? 'published' : (item.platform === 'instagram' ? item.status : 'not_selected')),
+          mediaId: item.instagramMediaId || item.platformStatus?.instagram?.mediaId || undefined,
+          error: item.platformStatus?.instagram?.error || null,
+          connected: item.platformStatus?.instagram?.connected ?? Boolean(item.instagramMediaId)
+        },
+        tiktok: {
+          status: item.platformStatus?.tiktok?.status || (item.tiktokData ? 'draft' : (item.platform === 'tiktok' ? item.status : 'not_selected')),
+          videoId: item.platformStatus?.tiktok?.videoId || undefined,
+          error: item.platformStatus?.tiktok?.error || null,
+          connected: item.platformStatus?.tiktok?.connected ?? Boolean(item.tiktokData)
+        }
+      },
+      tiktokDraftUrl: item.tiktokData?.draftUrl
+    }));
+
+    res.json(transformedItems);
+  } catch (e) {
+    err('listUploads error', e);
+    res.status(500).json({ error: 'Failed to fetch uploads', details: e.message });
+  }
+};
+
+export const deleteUpload = async (req, res) => {
+  try {
+    const uid = req.cookies?.uid;
+    if (!uid) return res.status(401).json({ error: 'Not authenticated' });
+    const { id } = req.params;
+    const deleted = await VideoSchedule.findOneAndDelete({ _id: id, userId: uid });
+    if (!deleted) return res.status(404).json({ error: 'Upload not found' });
+
+    if (deleted.filePath) {
+      try { fs.unlinkSync(deleted.filePath); } catch (_) { /* ignore */ }
+    }
+
+    res.json({ ok: true });
+  } catch (e) {
+    err('deleteUpload error', e);
+    res.status(500).json({ error: 'Failed to delete upload', details: e.message });
+  }
+};
+
+export const editUpload = async (req, res) => {
+  try {
+    const uid = req.cookies?.uid;
+    if (!uid) return res.status(401).json({ error: 'Not authenticated' });
+    const { id } = req.params;
+    const { title, description, scheduledTime } = req.body;
+    const updated = await VideoSchedule.findOneAndUpdate(
+      { _id: id, user: uid },
+      { title, description, scheduledTime },
+      { new: true }
+    ).lean();
+    if (!updated) return res.status(404).json({ error: 'Upload not found' });
+    res.json(updated);
+  } catch (e) {
+    err('editUpload error', e);
+    res.status(500).json({ error: 'Failed to edit upload', details: e.message });
+  }
+};
