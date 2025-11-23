@@ -36,9 +36,17 @@ export const uploadToTikTok = async (userId, filePath, options) => {
     log('Starting TikTok upload process...');
 
     // Get video file size
-    const stats = fs.statSync(filePath);
-    const fileSize = stats.size;
-    // const video = fs.readFileSync(filePath); // Removed to use stream
+    let fileSize;
+    let fileStream;
+
+    if (options.videoStream && options.videoSize) {
+      fileSize = options.videoSize;
+      fileStream = options.videoStream;
+    } else {
+      const stats = fs.statSync(filePath);
+      fileSize = stats.size;
+      fileStream = fs.createReadStream(filePath);
+    }
 
     // Step 1: Initialize video upload
     const initResponse = await fetch(`${TIKTOK_API_URL}/post/publish/video/init/`, {
@@ -77,7 +85,6 @@ export const uploadToTikTok = async (userId, filePath, options) => {
 
     // Step 2: Upload the video
     // Use stream for better memory management
-    const fileStream = fs.createReadStream(filePath);
 
     const uploadResponse = await fetch(initData.data.upload_url, {
       method: 'PUT',

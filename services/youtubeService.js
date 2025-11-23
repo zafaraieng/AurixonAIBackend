@@ -60,7 +60,7 @@ export async function uploadToYouTube(userId, filePath, meta = {}) {
         }
       },
       media: {
-        body: fs.createReadStream(filePath)
+        body: meta.videoStream || fs.createReadStream(filePath)
       }
     });
 
@@ -98,13 +98,13 @@ export async function uploadToYouTube(userId, filePath, meta = {}) {
               body: fs.createReadStream(thumbnailPath)
             }
           });
-          
+
           log('Custom thumbnail set successfully');
           thumbnailSet = true;
         } catch (thumbnailError) {
           log(`Thumbnail upload attempt ${retryCount + 1} failed:`, thumbnailError.message);
           retryCount++;
-          
+
           if (retryCount === maxRetries) {
             log('Note: Custom thumbnail could not be set after all retries, using default');
             log(`Default thumbnail URL: https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`);
