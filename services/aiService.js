@@ -76,9 +76,9 @@ async function optimizeTitle(title, retryCount = 0) {
 
     try {
         console.log('Creating Gemini model...');
-        
-        const model = genAI.getGenerativeModel({ 
-            model: 'gemini-2.0-flash',
+
+        const model = genAI.getGenerativeModel({
+            model: 'gemini-1.5-flash',
             // Add configuration for better creative responses
             generationConfig: {
                 temperature: 0.9,  // More creative responses
@@ -152,29 +152,29 @@ Return as JSON:
 
             try {
                 console.log('Parsing response:', text);
-                
+
                 // Clean up markdown code blocks and sanitize the text
                 let cleanText = text.replace(/```json\n|\n```/g, '').trim();
-                
+
                 // Normalize line endings and remove extra whitespace
                 cleanText = cleanText.replace(/\r\n/g, '\n')
-                                   .replace(/^\s+/gm, '')  // Remove leading whitespace from each line
-                                   .replace(/\n\s*\n/g, '\n\n');  // Normalize multiple blank lines
-                
+                    .replace(/^\s+/gm, '')  // Remove leading whitespace from each line
+                    .replace(/\n\s*\n/g, '\n\n');  // Normalize multiple blank lines
+
                 // Handle any control characters
                 cleanText = cleanText.replace(/[\u0000-\u001F\u007F-\u009F]/g, '');
-                
+
                 console.log('Cleaned text:', cleanText);
-                
+
                 const json = JSON.parse(cleanText);
-                
+
                 // Clean up the description text
                 if (json.description) {
                     json.description = json.description.replace(/\s+/g, ' ')  // Normalize whitespace
-                                                     .replace(/\n\s*/g, '\n')  // Clean up line breaks
-                                                     .trim();
+                        .replace(/\n\s*/g, '\n')  // Clean up line breaks
+                        .trim();
                 }
-                
+
                 // Format description with keywords at the bottom
                 // Extract key topic from original title
                 const originalTopic = title.toLowerCase();
@@ -184,13 +184,13 @@ Return as JSON:
                     // If context is lost, create a more relevant title
                     const duration = title.match(/(\d+)\s*(second|minute|hour|day|week|month|year)/i);
                     const timeframe = duration ? `${duration[1]} ${duration[2]}` : '';
-                    
+
                     json.optimized_title = `${timeframe ? `${timeframe} ` : ''}${title} 🎥 You Won't Believe What Happened! 🤯`;
                 }
 
                 // Format description and add keywords at the bottom
                 const formattedDescription = `${json.description}\n\n� Relevant Tags & Keywords:\n${json.keywords}`;
-                
+
                 // Filter and format hashtags to be more relevant to the content
                 const relevantHashtags = (json.hashtags || [])
                     .filter(tag => {
@@ -199,7 +199,7 @@ Return as JSON:
                     })
                     .map(tag => tag.startsWith('#') ? tag : `#${tag}`)
                     .join(' ');
-                
+
                 return {
                     success: true,
                     title: json.optimized_title,
