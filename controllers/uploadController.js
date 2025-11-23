@@ -10,6 +10,10 @@ import { convertToShorts } from '../utils/videoConverter.js';
 import fs from 'fs';
 import path from 'path';
 import { downloadFile } from '../utils/fileDownloader.js';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // New function to save metadata only (Step 1 of Client-Side Orchestration)
 export const saveVideoMetadata = async (req, res) => {
@@ -103,6 +107,7 @@ export const saveVideoMetadata = async (req, res) => {
 // New function to process a SINGLE platform (Step 2 of Client-Side Orchestration)
 export const processPlatformUpload = async (req, res) => {
   let tmpDir = '';
+  let stage = 'init';
   try {
     const { videoId, platform, privacyStatus = 'private', videoType = 'long' } = req.body;
     const uid = req.cookies?.uid || 'dev-user-' + Date.now();
@@ -133,9 +138,10 @@ export const processPlatformUpload = async (req, res) => {
     const needsDownload = ['youtube', 'tiktok'].includes(platform);
     let tempFilePath = '';
 
+    stage = 'download';
     if (needsDownload) {
       // Create temp directory
-      const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(path.dirname(import.meta.url.replace('file://', '')), '../temp');
+      const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(__dirname, '../temp');
       if (!fs.existsSync(baseTmpDir)) {
         try { fs.mkdirSync(baseTmpDir, { recursive: true }); } catch (e) { /* ignore */ }
       }
@@ -156,10 +162,12 @@ export const processPlatformUpload = async (req, res) => {
       }
     }
 
+    stage = 'upload_init';
     let result = null;
 
     switch (platform) {
       case 'youtube':
+        stage = 'youtube_upload';
         log('Starting YouTube upload...');
         try {
           result = await uploadToYouTube(uid, tempFilePath, {
@@ -184,6 +192,7 @@ export const processPlatformUpload = async (req, res) => {
         break;
 
       case 'instagram':
+        stage = 'instagram_upload';
         // Pass URL directly
         const igResult = await InstagramService.uploadToInstagram(uid, videoUrl, {
           title: video.title,
@@ -201,6 +210,7 @@ export const processPlatformUpload = async (req, res) => {
         break;
 
       case 'facebook':
+        stage = 'facebook_upload';
         // Pass URL directly
         const fbResult = await uploadToFacebook(uid, videoUrl, {
           title: video.title,
@@ -216,6 +226,7 @@ export const processPlatformUpload = async (req, res) => {
         break;
 
       case 'tiktok':
+        stage = 'tiktok_upload';
         log('Starting TikTok upload...');
         try {
           const ttResult = await uploadToTikTok(uid, tempFilePath, {
@@ -240,11 +251,12 @@ export const processPlatformUpload = async (req, res) => {
         throw new Error(`Unsupported platform: ${platform}`);
     }
 
+    stage = 'save_db';
     await video.save();
     res.json({ success: true, platform, result });
 
   } catch (error) {
-    console.error(`Process platform ${req.body?.platform} error:`, error);
+    console.error(`Process platform ${req.body?.platform} error at stage ${stage}:`, error);
 
     // Try to update status to failed
     try {
@@ -258,7 +270,11 @@ export const processPlatformUpload = async (req, res) => {
       }
     } catch (dbError) { console.error('Error updating video status:', dbError); }
 
-    res.status(500).json({ error: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
+    res.status(500).json({
+      error: error.message,
+      stage: stage,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   } finally {
     // Clean up
     try {
@@ -309,7 +325,7 @@ export const createAndUpload = async (req, res) => {
 
     // Create temp directory for platform-specific conversions
     // Use a consistent temp dir base
-    const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(path.dirname(import.meta.url.replace('file://', '')), '../temp');
+    const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(__dirname, '../temp');
     // Ensure base temp dir exists
     if (!fs.existsSync(baseTmpDir)) {
       try { fs.mkdirSync(baseTmpDir, { recursive: true }); } catch (e) { /* ignore */ }

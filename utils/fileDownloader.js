@@ -1,4 +1,4 @@
-import axios from 'axios';
+import fetch from 'node-fetch';
 import fs from 'fs';
 import { pipeline } from 'stream';
 import { promisify } from 'util';
@@ -13,13 +13,11 @@ const streamPipeline = promisify(pipeline);
  */
 export const downloadFile = async (url, destPath) => {
     try {
-        const response = await axios({
-            method: 'GET',
-            url: url,
-            responseType: 'stream',
-        });
-
-        await streamPipeline(response.data, fs.createWriteStream(destPath));
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`Unexpected response ${response.statusText}`);
+        }
+        await streamPipeline(response.body, fs.createWriteStream(destPath));
         console.log(`File downloaded successfully to ${destPath}`);
     } catch (error) {
         console.error('Error downloading file:', error);
