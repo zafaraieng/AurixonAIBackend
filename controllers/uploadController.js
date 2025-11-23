@@ -216,263 +216,150 @@ export const createAndUpload = async (req, res) => {
           }
           await video.save();
 
-          results.errors.push(`YouTube: ${e.message}`);
-          err('YouTube upload error:', e);
-        }
-      }
+          video.errorMessage = results.errors
+            .filter(error => selectedPlatforms.some(platform => error.startsWith(platform)))
+            .join('; ');
 
-      // Process Instagram next
-      if (platforms.instagram) {
-        try {
-          log('Uploading to Instagram...');
-          const igSession = await InstagramService.verifySession(uid);
-          if (!igSession) {
-            throw new Error('Instagram session not found or expired');
+          if (results.youtube) {
+            video.youtubeVideoId = results.youtube.id;
+            video.youtubeThumbnailUrl = results.youtube.thumbnailUrl;
           }
+          video.facebookPostId = results.facebook;
+          video.instagramMediaId = results.instagram;
 
-          // For multi-platform uploads, wait for previous operations
-          if (Object.values(platforms).filter(Boolean).length > 1) {
-            log('Multiple platforms selected, waiting for previous operations...');
-            await new Promise(resolve => setTimeout(resolve, 5000));
-          }
-
-          const igResult = await InstagramService.uploadToInstagram(uid, req.files.file[0].path, {
-            title,
-            description,
-            publishTime,
-            convertedSuffix: '_ig',
-            userId: uid,
-            mediaType: 'REELS',
-            ignoreThumbnail: true,
-            multiPlatform: Object.values(platforms).filter(Boolean).length > 1
-          });
-
-          if (igResult?.id) {
-            results.instagram = igResult.id;
-            video.instagramMediaId = igResult.id;
-            video.instagramStatus = 'published';
-            video.platformStatus.instagram = {
-              ...video.platformStatus.instagram,
-              status: 'published',
-              mediaId: igResult.id
+          if (results.tiktok) {
+            video.tiktokData = {
+              status: 'redirect',
+              url: results.tiktok.url,
+              message: results.tiktok.message
             };
-
-            if (selectedPlatforms.length === 1) {
-              video.status = 'published';
-            }
-            await video.save();
-
-            if (igResult.note) {
-              log('Instagram upload note:', igResult.note);
-            }
-            log('Instagram upload complete. Media ID:', igResult.id);
-          } else {
-            throw new Error('Instagram upload failed: No media ID returned');
           }
-        } catch (e) {
-          video.platformStatus.instagram = {
-            ...video.platformStatus.instagram,
-            status: 'failed',
-            error: e.message
-          };
+
+          video.platform = selectedPlatforms.length > 1 ? 'multi' : selectedPlatforms[0];
           await video.save();
-          results.errors.push(`Instagram: ${e.message}`);
-          err('Instagram upload error:', e);
-        }
-      }
 
-      // Process Facebook last
-      if (platforms.facebook) {
-        try {
-          log('Uploading to Facebook...');
-          const fbResult = await uploadToFacebook(uid, req.files.file[0].path, {
-            title,
-            description,
-            publishTime,
-            convertedSuffix: '_fb'
+          res.json({
+            video,
+            tiktok: results.tiktok
           });
-          results.facebook = fbResult.id;
-          if (fbResult.note) {
-            log('Facebook upload note:', fbResult.note);
+        } finally {
+          // Clean up temp directory
+          try {
+            if (tmpDir && fs.existsSync(tmpDir)) {
+              fs.rmSync(tmpDir, { recursive: true, force: true });
+            }
+          } catch (cleanupError) {
+            log('Error cleaning up temp directory:', cleanupError);
           }
-          log('Facebook upload complete. Post ID:', fbResult.id);
-        } catch (e) {
-          results.errors.push(`Facebook: ${e.message}`);
-          err('Facebook upload error:', e);
         }
-      }
-
-      // Process TikTok
-      if (platforms.tiktok) {
+      } catch (e) {
+        // Clean up temp directory on error
         try {
-          log('Starting TikTok upload process...');
-          const tiktokResult = await uploadToTikTok(uid, req.files.file[0].path, {
-            title,
-            description
-          });
-
-          results.tiktok = {
-            status: tiktokResult.status,
-            publishId: tiktokResult.publishId,
-            uploadStatus: tiktokResult.uploadStatus,
-            message: tiktokResult.message
-          };
-
-          log('TikTok upload completed:', tiktokResult);
-        } catch (e) {
-          results.errors.push(`TikTok: ${e.message}`);
-          err('TikTok upload error:', e);
+          if (tmpDir && fs.existsSync(tmpDir)) {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          }
+        } catch (cleanupError) {
+          log('Error cleaning up temp directory:', cleanupError);
         }
+
+        console.error('Upload controller error:', {
+          error: e,
+          message: e.message,
+          stack: e.stack,
+          files: req.files
+        });
+        err('Upload controller error:', e);
+        res.status(500).json({
+          error: 'Upload failed',
+          details: e.message,
+          technical: process.env.NODE_ENV === 'development' ? e.stack : undefined
+        });
       }
+    };
 
-      // Update final statuses
-      const successfulUploads = selectedPlatforms.filter(platform => results[platform] !== null);
-      video.status = successfulUploads.length === 0 ? 'failed' : 'published';
-
-      video.errorMessage = results.errors
-        .filter(error => selectedPlatforms.some(platform => error.startsWith(platform)))
-        .join('; ');
-
-      if (results.youtube) {
-        video.youtubeVideoId = results.youtube.id;
-        video.youtubeThumbnailUrl = results.youtube.thumbnailUrl;
-      }
-      video.facebookPostId = results.facebook;
-      video.instagramMediaId = results.instagram;
-
-      if (results.tiktok) {
-        video.tiktokData = {
-          status: 'redirect',
-          url: results.tiktok.url,
-          message: results.tiktok.message
-        };
-      }
-
-      video.platform = selectedPlatforms.length > 1 ? 'multi' : selectedPlatforms[0];
-      await video.save();
-
-      res.json({
-        video,
-        tiktok: results.tiktok
-      });
-    } finally {
-      // Clean up temp directory
+    export const listUploads = async (req, res) => {
       try {
-        if (tmpDir && fs.existsSync(tmpDir)) {
-          fs.rmSync(tmpDir, { recursive: true, force: true });
-        }
-      } catch (cleanupError) {
-        log('Error cleaning up temp directory:', cleanupError);
+        const uid = req.cookies?.uid;
+        if (!uid) return res.status(401).json({ error: 'Not authenticated' });
+
+        const items = await VideoSchedule.find({ userId: uid })
+          .sort({ createdAt: -1 })
+          .lean();
+
+        const transformedItems = items.map(item => ({
+          ...item,
+          platformStatus: {
+            youtube: {
+              status: item.platformStatus?.youtube?.status || (item.youtubeVideoId ? 'published' : (item.platform === 'youtube' ? item.status : 'not_selected')),
+              uploadStatus: item.platformStatus?.youtube?.uploadStatus || (item.youtubeVideoId ? 'processed' : undefined),
+              videoId: item.youtubeVideoId || item.platformStatus?.youtube?.videoId || undefined,
+              thumbnailUrl: item.youtubeThumbnailUrl || item.platformStatus?.youtube?.thumbnailUrl || undefined,
+              error: item.platformStatus?.youtube?.error || null,
+              connected: item.platformStatus?.youtube?.connected ?? Boolean(item.youtubeVideoId)
+            },
+            facebook: {
+              status: item.platformStatus?.facebook?.status || (item.facebookPostId ? 'published' : (item.platform === 'facebook' ? item.status : 'not_selected')),
+              postId: item.facebookPostId || item.platformStatus?.facebook?.postId || undefined,
+              error: item.platformStatus?.facebook?.error || null,
+              connected: item.platformStatus?.facebook?.connected ?? Boolean(item.facebookPostId)
+            },
+            instagram: {
+              status: item.platformStatus?.instagram?.status || (item.instagramMediaId ? 'published' : (item.platform === 'instagram' ? item.status : 'not_selected')),
+              mediaId: item.instagramMediaId || item.platformStatus?.instagram?.mediaId || undefined,
+              error: item.platformStatus?.instagram?.error || null,
+              connected: item.platformStatus?.instagram?.connected ?? Boolean(item.instagramMediaId)
+            },
+            tiktok: {
+              status: item.platformStatus?.tiktok?.status || (item.tiktokData ? 'draft' : (item.platform === 'tiktok' ? item.status : 'not_selected')),
+              videoId: item.platformStatus?.tiktok?.videoId || undefined,
+              error: item.platformStatus?.tiktok?.error || null,
+              connected: item.platformStatus?.tiktok?.connected ?? Boolean(item.tiktokData)
+            }
+          },
+          tiktokDraftUrl: item.tiktokData?.draftUrl
+        }));
+
+        res.json(transformedItems);
+      } catch (e) {
+        err('listUploads error', e);
+        res.status(500).json({ error: 'Failed to fetch uploads', details: e.message });
       }
-    }
-  } catch (e) {
-    // Clean up temp directory on error
-    try {
-      if (tmpDir && fs.existsSync(tmpDir)) {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      }
-    } catch (cleanupError) {
-      log('Error cleaning up temp directory:', cleanupError);
-    }
+    };
 
-    console.error('Upload controller error:', {
-      error: e,
-      message: e.message,
-      stack: e.stack,
-      files: req.files
-    });
-    err('Upload controller error:', e);
-    res.status(500).json({
-      error: 'Upload failed',
-      details: e.message,
-      technical: process.env.NODE_ENV === 'development' ? e.stack : undefined
-    });
-  }
-};
+    export const deleteUpload = async (req, res) => {
+      try {
+        const uid = req.cookies?.uid;
+        if (!uid) return res.status(401).json({ error: 'Not authenticated' });
+        const { id } = req.params;
+        const deleted = await VideoSchedule.findOneAndDelete({ _id: id, userId: uid });
+        if (!deleted) return res.status(404).json({ error: 'Upload not found' });
 
-export const listUploads = async (req, res) => {
-  try {
-    const uid = req.cookies?.uid;
-    if (!uid) return res.status(401).json({ error: 'Not authenticated' });
-
-    const items = await VideoSchedule.find({ userId: uid })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const transformedItems = items.map(item => ({
-      ...item,
-      platformStatus: {
-        youtube: {
-          status: item.platformStatus?.youtube?.status || (item.youtubeVideoId ? 'published' : (item.platform === 'youtube' ? item.status : 'not_selected')),
-          uploadStatus: item.platformStatus?.youtube?.uploadStatus || (item.youtubeVideoId ? 'processed' : undefined),
-          videoId: item.youtubeVideoId || item.platformStatus?.youtube?.videoId || undefined,
-          thumbnailUrl: item.youtubeThumbnailUrl || item.platformStatus?.youtube?.thumbnailUrl || undefined,
-          error: item.platformStatus?.youtube?.error || null,
-          connected: item.platformStatus?.youtube?.connected ?? Boolean(item.youtubeVideoId)
-        },
-        facebook: {
-          status: item.platformStatus?.facebook?.status || (item.facebookPostId ? 'published' : (item.platform === 'facebook' ? item.status : 'not_selected')),
-          postId: item.facebookPostId || item.platformStatus?.facebook?.postId || undefined,
-          error: item.platformStatus?.facebook?.error || null,
-          connected: item.platformStatus?.facebook?.connected ?? Boolean(item.facebookPostId)
-        },
-        instagram: {
-          status: item.platformStatus?.instagram?.status || (item.instagramMediaId ? 'published' : (item.platform === 'instagram' ? item.status : 'not_selected')),
-          mediaId: item.instagramMediaId || item.platformStatus?.instagram?.mediaId || undefined,
-          error: item.platformStatus?.instagram?.error || null,
-          connected: item.platformStatus?.instagram?.connected ?? Boolean(item.instagramMediaId)
-        },
-        tiktok: {
-          status: item.platformStatus?.tiktok?.status || (item.tiktokData ? 'draft' : (item.platform === 'tiktok' ? item.status : 'not_selected')),
-          videoId: item.platformStatus?.tiktok?.videoId || undefined,
-          error: item.platformStatus?.tiktok?.error || null,
-          connected: item.platformStatus?.tiktok?.connected ?? Boolean(item.tiktokData)
+        if (deleted.filePath) {
+          try { fs.unlinkSync(deleted.filePath); } catch (_) { /* ignore */ }
         }
-      },
-      tiktokDraftUrl: item.tiktokData?.draftUrl
-    }));
 
-    res.json(transformedItems);
-  } catch (e) {
-    err('listUploads error', e);
-    res.status(500).json({ error: 'Failed to fetch uploads', details: e.message });
-  }
-};
+        res.json({ ok: true });
+      } catch (e) {
+        err('deleteUpload error', e);
+        res.status(500).json({ error: 'Failed to delete upload', details: e.message });
+      }
+    };
 
-export const deleteUpload = async (req, res) => {
-  try {
-    const uid = req.cookies?.uid;
-    if (!uid) return res.status(401).json({ error: 'Not authenticated' });
-    const { id } = req.params;
-    const deleted = await VideoSchedule.findOneAndDelete({ _id: id, userId: uid });
-    if (!deleted) return res.status(404).json({ error: 'Upload not found' });
-
-    if (deleted.filePath) {
-      try { fs.unlinkSync(deleted.filePath); } catch (_) { /* ignore */ }
-    }
-
-    res.json({ ok: true });
-  } catch (e) {
-    err('deleteUpload error', e);
-    res.status(500).json({ error: 'Failed to delete upload', details: e.message });
-  }
-};
-
-export const editUpload = async (req, res) => {
-  try {
-    const uid = req.cookies?.uid;
-    if (!uid) return res.status(401).json({ error: 'Not authenticated' });
-    const { id } = req.params;
-    const { title, description, scheduledTime } = req.body;
-    const updated = await VideoSchedule.findOneAndUpdate(
-      { _id: id, user: uid },
-      { title, description, scheduledTime },
-      { new: true }
-    ).lean();
-    if (!updated) return res.status(404).json({ error: 'Upload not found' });
-    res.json(updated);
-  } catch (e) {
-    err('editUpload error', e);
-    res.status(500).json({ error: 'Failed to edit upload', details: e.message });
-  }
-};
+    export const editUpload = async (req, res) => {
+      try {
+        const uid = req.cookies?.uid;
+        if (!uid) return res.status(401).json({ error: 'Not authenticated' });
+        const { id } = req.params;
+        const { title, description, scheduledTime } = req.body;
+        const updated = await VideoSchedule.findOneAndUpdate(
+          { _id: id, user: uid },
+          { title, description, scheduledTime },
+          { new: true }
+        ).lean();
+        if (!updated) return res.status(404).json({ error: 'Upload not found' });
+        res.json(updated);
+      } catch (e) {
+        err('editUpload error', e);
+        res.status(500).json({ error: 'Failed to edit upload', details: e.message });
+      }
+    };
