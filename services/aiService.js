@@ -78,7 +78,7 @@ async function optimizeTitle(title, retryCount = 0) {
         console.log('Creating Gemini model...');
 
         const model = genAI.getGenerativeModel({
-            model: 'gemini-1.5-flash',
+            model: 'gemini-pro',
             // Add configuration for better creative responses
             generationConfig: {
                 temperature: 0.9,  // More creative responses
@@ -189,7 +189,7 @@ Return as JSON:
                 }
 
                 // Format description and add keywords at the bottom
-                const formattedDescription = `${json.description}\n\n� Relevant Tags & Keywords:\n${json.keywords}`;
+                const formattedDescription = `${json.description}\n\n Relevant Tags & Keywords:\n${json.keywords}`;
 
                 // Filter and format hashtags to be more relevant to the content
                 const relevantHashtags = (json.hashtags || [])
