@@ -146,20 +146,34 @@ export const processPlatformUpload = async (req, res) => {
 
       const originalName = 'video.mp4';
       tempFilePath = path.join(tmpDir, originalName);
+      log(`Downloading video from ${videoUrl} to ${tempFilePath}`);
       await downloadFile(videoUrl, tempFilePath);
+
+      const stats = fs.statSync(tempFilePath);
+      log(`Downloaded file size: ${stats.size} bytes`);
+      if (stats.size === 0) {
+        throw new Error('Downloaded video file is empty');
+      }
     }
 
     let result = null;
 
     switch (platform) {
       case 'youtube':
-        result = await uploadToYouTube(uid, tempFilePath, {
-          title: video.title,
-          description: video.description,
-          privacyStatus,
-          publishAt: video.scheduledAt,
-          videoType,
-        });
+        log('Starting YouTube upload...');
+        try {
+          result = await uploadToYouTube(uid, tempFilePath, {
+            title: video.title,
+            description: video.description,
+            privacyStatus,
+            publishAt: video.scheduledAt,
+            videoType,
+          });
+          log('YouTube upload result:', result);
+        } catch (ytError) {
+          console.error('YouTube upload internal error:', ytError);
+          throw ytError;
+        }
         video.platformStatus.youtube = {
           connected: true,
           status: 'published',
@@ -202,16 +216,23 @@ export const processPlatformUpload = async (req, res) => {
         break;
 
       case 'tiktok':
-        const ttResult = await uploadToTikTok(uid, tempFilePath, {
-          title: video.title,
-          description: video.description
-        });
-        result = ttResult;
-        video.platformStatus.tiktok = {
-          connected: true,
-          status: ttResult.status, // 'draft' or 'published'
-          uploadStatus: ttResult.uploadStatus
-        };
+        log('Starting TikTok upload...');
+        try {
+          const ttResult = await uploadToTikTok(uid, tempFilePath, {
+            title: video.title,
+            description: video.description
+          });
+          log('TikTok upload result:', ttResult);
+          result = ttResult;
+          video.platformStatus.tiktok = {
+            connected: true,
+            status: ttResult.status, // 'draft' or 'published'
+            uploadStatus: ttResult.uploadStatus
+          };
+        } catch (ttError) {
+          console.error('TikTok upload internal error:', ttError);
+          throw ttError;
+        }
         // video.tiktokData?
         break;
 
