@@ -12,7 +12,7 @@ const TIKTOK_API_URL = 'https://open.tiktokapis.com/v2';
 export const uploadToTikTok = async (userId, filePath, options) => {
   try {
     const { title, description } = options;
-    
+
     // Check if user has TikTok connected
     const user = await User.findById(userId).select('tiktok');
     if (!user?.tiktok?.accessToken) {
@@ -20,12 +20,12 @@ export const uploadToTikTok = async (userId, filePath, options) => {
     }
 
     // Check for required scopes
-  const requiredScopes = ['user.info.basic', 'video.upload', 'video.publish'];
-  const missingScopes = requiredScopes.filter(scope => !user.tiktok.scope?.includes(scope));
-    
-  if (missingScopes.length > 0) {
-    throw new Error(`Missing required TikTok permissions: ${missingScopes.join(', ')}. Please reconnect your TikTok account with the required permissions.`);
-  }
+    const requiredScopes = ['user.info.basic', 'video.upload', 'video.publish'];
+    const missingScopes = requiredScopes.filter(scope => !user.tiktok.scope?.includes(scope));
+
+    if (missingScopes.length > 0) {
+      throw new Error(`Missing required TikTok permissions: ${missingScopes.join(', ')}. Please reconnect your TikTok account with the required permissions.`);
+    }
 
     // Ensure the connected user has upload permission
     const accessToken = user.tiktok.accessToken;
@@ -38,7 +38,7 @@ export const uploadToTikTok = async (userId, filePath, options) => {
     // Get video file size
     const stats = fs.statSync(filePath);
     const fileSize = stats.size;
-    const video = fs.readFileSync(filePath);
+    // const video = fs.readFileSync(filePath); // Removed to use stream
 
     // Step 1: Initialize video upload
     const initResponse = await fetch(`${TIKTOK_API_URL}/post/publish/video/init/`, {
@@ -76,14 +76,17 @@ export const uploadToTikTok = async (userId, filePath, options) => {
     }
 
     // Step 2: Upload the video
+    // Use stream for better memory management
+    const fileStream = fs.createReadStream(filePath);
+
     const uploadResponse = await fetch(initData.data.upload_url, {
       method: 'PUT',
       headers: {
-        'Content-Range': `bytes 0-${fileSize-1}/${fileSize}`,
+        'Content-Range': `bytes 0-${fileSize - 1}/${fileSize}`,
         'Content-Length': fileSize.toString(),
         'Content-Type': 'video/mp4'
       },
-      body: video
+      body: fileStream
     });
 
     if (!uploadResponse.ok) {

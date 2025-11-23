@@ -122,24 +122,32 @@ export const processPlatformUpload = async (req, res) => {
     video.platformStatus[platform].status = 'processing';
     await video.save();
 
-    // Create temp directory
-    const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(path.dirname(import.meta.url.replace('file://', '')), '../temp');
-    if (!fs.existsSync(baseTmpDir)) {
-      try { fs.mkdirSync(baseTmpDir, { recursive: true }); } catch (e) { /* ignore */ }
-    }
-    tmpDir = path.join(baseTmpDir, 'tmp_proc_' + Date.now());
-    if (!fs.existsSync(tmpDir)) {
-      fs.mkdirSync(tmpDir, { recursive: true });
-    }
-
-    // Download video
     const videoUrl = video.mediaUrl;
     if (!videoUrl) {
       throw new Error('No media URL found for video');
     }
-    const originalName = 'video.mp4';
-    const tempFilePath = path.join(tmpDir, originalName);
-    await downloadFile(videoUrl, tempFilePath);
+
+    // Determine if we need to download the file
+    // YouTube and TikTok require file streams/binary
+    // Instagram and Facebook can accept public URLs
+    const needsDownload = ['youtube', 'tiktok'].includes(platform);
+    let tempFilePath = '';
+
+    if (needsDownload) {
+      // Create temp directory
+      const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(path.dirname(import.meta.url.replace('file://', '')), '../temp');
+      if (!fs.existsSync(baseTmpDir)) {
+        try { fs.mkdirSync(baseTmpDir, { recursive: true }); } catch (e) { /* ignore */ }
+      }
+      tmpDir = path.join(baseTmpDir, 'tmp_proc_' + Date.now());
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+
+      const originalName = 'video.mp4';
+      tempFilePath = path.join(tmpDir, originalName);
+      await downloadFile(videoUrl, tempFilePath);
+    }
 
     let result = null;
 
@@ -151,7 +159,6 @@ export const processPlatformUpload = async (req, res) => {
           privacyStatus,
           publishAt: video.scheduledAt,
           videoType,
-          // tags?
         });
         video.platformStatus.youtube = {
           connected: true,
@@ -163,7 +170,8 @@ export const processPlatformUpload = async (req, res) => {
         break;
 
       case 'instagram':
-        const igResult = await InstagramService.uploadToInstagram(uid, tempFilePath, {
+        // Pass URL directly
+        const igResult = await InstagramService.uploadToInstagram(uid, videoUrl, {
           title: video.title,
           description: video.description,
           userId: uid,
@@ -179,7 +187,8 @@ export const processPlatformUpload = async (req, res) => {
         break;
 
       case 'facebook':
-        const fbResult = await uploadToFacebook(uid, tempFilePath, {
+        // Pass URL directly
+        const fbResult = await uploadToFacebook(uid, videoUrl, {
           title: video.title,
           description: video.description
         });
@@ -228,7 +237,7 @@ export const processPlatformUpload = async (req, res) => {
       }
     } catch (dbError) { console.error('Error updating video status:', dbError); }
 
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, stack: process.env.NODE_ENV === 'development' ? error.stack : undefined });
   } finally {
     // Clean up
     try {
