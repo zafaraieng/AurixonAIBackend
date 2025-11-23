@@ -106,16 +106,14 @@ export const saveVideoMetadata = async (req, res) => {
 
 // New function to process a SINGLE platform (Step 2 of Client-Side Orchestration)
 export const processPlatformUpload = async (req, res) => {
-  let tmpDir = '';
-  let stage = 'init';
+  const { videoId, platform, privacyStatus = 'private', videoType = 'long' } = req.body;
+  const uid = req.cookies?.uid || 'dev-user-' + Date.now();
+
+  if (!videoId || !platform) {
+    return res.status(400).json({ error: 'Video ID and platform are required' });
+  }
+
   try {
-    const { videoId, platform, privacyStatus = 'private', videoType = 'long' } = req.body;
-    const uid = req.cookies?.uid || 'dev-user-' + Date.now();
-
-    if (!videoId || !platform) {
-      return res.status(400).json({ error: 'Video ID and platform are required' });
-    }
-
     const video = await VideoSchedule.findOne({ _id: videoId, userId: uid });
     if (!video) {
       return res.status(404).json({ error: 'Video not found' });
@@ -127,35 +125,154 @@ export const processPlatformUpload = async (req, res) => {
     video.platformStatus[platform].status = 'processing';
     await video.save();
 
+    // RESPOND IMMEDIATELY to avoid timeout
+    res.json({
+      success: true,
+      platform,
+      status: 'processing',
+      message: 'Upload started. Check /api/list for updates.'
+    });
+
+    // Continue processing in background (fire-and-forget)
+    processUploadAsync(videoId, platform, privacyStatus, videoType, uid).catch(err => {
+      console.error('Background upload error:', err);
+    });
   } catch (error) {
-    console.error(`Process platform ${req.body?.platform} error at stage ${stage}:`, error);
-
-    // Try to update status to failed
-    try {
-      if (req.body?.videoId) {
-        const video = await VideoSchedule.findOne({ _id: req.body.videoId });
-        if (video && video.platformStatus && video.platformStatus[req.body.platform]) {
-          video.platformStatus[req.body.platform].status = 'failed';
-          video.platformStatus[req.body.platform].error = error.message;
-          await video.save();
-        }
-      }
-    } catch (dbError) { console.error('Error updating video status:', dbError); }
-
+    console.error(`Process platform ${platform} error:`, error);
     res.status(500).json({
       error: error.message,
-      stage: stage,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
-  } finally {
-    // Clean up
-    try {
-      if (tmpDir && fs.existsSync(tmpDir)) {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      }
-    } catch (e) { console.error('Cleanup error:', e); }
   }
 };
+
+// Async background processing function
+async function processUploadAsync(videoId, platform, privacyStatus, videoType, uid) {
+  let stage = 'init';
+  try {
+    const video = await VideoSchedule.findOne({ _id: videoId, userId: uid });
+    if (!video) {
+      throw new Error('Video not found');
+    }
+
+    const videoUrl = video.mediaUrl;
+    if (!videoUrl) {
+      throw new Error('No media URL found for video');
+    }
+
+    const needsStreaming = ['youtube', 'tiktok'].includes(platform);
+    let videoStream = null;
+    let videoSize = 0;
+
+    stage = 'download_stream';
+    if (needsStreaming) {
+      log(`Fetching video stream from ${videoUrl}`);
+      const response = await fetch(videoUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch video: ${response.statusText}`);
+      }
+
+      videoSize = Number(response.headers.get('content-length'));
+      videoStream = response.body;
+
+      if (!videoSize) {
+        try {
+          const headResponse = await fetch(videoUrl, { method: 'HEAD' });
+          videoSize = Number(headResponse.headers.get('content-length'));
+        } catch (e) {
+          console.warn('Could not determine video size:', e);
+        }
+      }
+
+      log(`Video stream ready. Size: ${videoSize} bytes`);
+    }
+
+    stage = 'upload_' + platform;
+    let result = null;
+
+    switch (platform) {
+      case 'youtube':
+        log('Starting YouTube upload...');
+        result = await uploadToYouTube(uid, null, {
+          title: video.title,
+          description: video.description,
+          privacyStatus,
+          publishAt: video.scheduledAt,
+          videoType,
+          videoStream
+        });
+        video.platformStatus.youtube = {
+          connected: true,
+          status: 'published',
+          videoId: result.videoId,
+          thumbnailUrl: result.thumbnailUrl
+        };
+        video.youtubeVideoId = result.videoId;
+        break;
+
+      case 'instagram':
+        const igResult = await InstagramService.uploadToInstagram(uid, videoUrl, {
+          title: video.title,
+          description: video.description,
+          userId: uid,
+          mediaType: 'REELS'
+        });
+        video.platformStatus.instagram = {
+          connected: true,
+          status: 'published',
+          mediaId: igResult.id
+        };
+        video.instagramMediaId = igResult.id;
+        break;
+
+      case 'facebook':
+        const fbResult = await uploadToFacebook(uid, videoUrl, {
+          title: video.title,
+          description: video.description
+        });
+        video.platformStatus.facebook = {
+          connected: true,
+          status: 'published',
+          postId: fbResult.id
+        };
+        video.facebookPostId = fbResult.id;
+        break;
+
+      case 'tiktok':
+        log('Starting TikTok upload...');
+        const ttResult = await uploadToTikTok(uid, null, {
+          title: video.title,
+          description: video.description,
+          videoStream,
+          videoSize
+        });
+        video.platformStatus.tiktok = {
+          connected: true,
+          status: ttResult.status,
+          uploadStatus: ttResult.uploadStatus
+        };
+        break;
+
+      default:
+        throw new Error(`Unsupported platform: ${platform}`);
+    }
+
+    await video.save();
+    log(`Background upload completed for ${platform}`);
+  } catch (error) {
+    console.error(`Background ${platform} upload error at ${stage}:`, error);
+    try {
+      const video = await VideoSchedule.findOne({ _id: videoId });
+      if (video && video.platformStatus && video.platformStatus[platform]) {
+        video.platformStatus[platform].status = 'failed';
+        video.platformStatus[platform].error = error.message;
+        await video.save();
+      }
+    } catch (dbError) {
+      console.error('Error updating video status:', dbError);
+    }
+  }
+}
 
 export const createAndUpload = async (req, res) => {
   // Legacy function - keeping for reference or fallback, but logic is largely duplicated.
