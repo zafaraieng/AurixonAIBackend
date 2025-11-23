@@ -114,15 +114,99 @@ export const processPlatformUpload = async (req, res) => {
     const video = await VideoSchedule.findOne({ _id: videoId, userId: uid });
     if (!video) {
       return res.status(404).json({ error: 'Video not found' });
+    }
+
+    let result;
+    try {
+      // Create temp directory
+      const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(path.dirname(import.meta.url.replace('file://', '')), '../temp');
+      if (!fs.existsSync(baseTmpDir)) {
+        try { fs.mkdirSync(baseTmpDir, { recursive: true }); } catch (e) { /* ignore */ }
+      }
+
+      tmpDir = path.join(baseTmpDir, 'tmp_' + Date.now());
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+
+      // Download video from Cloudinary
+      const tempFilePath = path.join(tmpDir, 'video.mp4');
+      if (video.mediaUrl) {
+        await downloadFile(video.mediaUrl, tempFilePath);
+      } else {
+        throw new Error('No media URL found');
+      }
+
+      // Process based on platform
+      switch (platform) {
+        case 'youtube':
+          const ytResult = await uploadToYouTube(uid, tempFilePath, {
+            title: video.title,
+            description: video.description,
+            privacyStatus: 'private',
+            publishAt: video.scheduledAt,
+            videoType: 'long',
+            multiPlatform: video.platform === 'multi'
+          });
+          result = ytResult;
+          video.youtubeVideoId = ytResult.videoId;
+          video.youtubeThumbnailUrl = ytResult.thumbnailUrl;
+          break;
+
+        case 'instagram':
+          const igResult = await InstagramService.uploadToInstagram(uid, tempFilePath, {
+            title: video.title,
+            description: video.description,
+            publishTime: video.scheduledAt,
+            userId: uid,
+            mediaType: 'REELS',
+            ignoreThumbnail: true,
+            multiPlatform: video.platform === 'multi'
+          });
+          result = igResult;
+          video.instagramMediaId = igResult.id;
+          break;
+
+        case 'facebook':
+          const fbResult = await uploadToFacebook(uid, tempFilePath, {
+            title: video.title,
+            description: video.description,
+            publishTime: video.scheduledAt
+          });
+          result = fbResult;
+          video.facebookPostId = fbResult.id;
+          break;
+
+        case 'tiktok':
+          const ttResult = await uploadToTikTok(uid, tempFilePath, {
+            title: video.title,
+            description: video.description
+          });
+          result = ttResult;
+          video.tiktokData = {
+            status: 'redirect',
+            url: ttResult.url,
+            message: ttResult.message
+          };
+          break;
+
+        default:
+          throw new Error(`Platform ${platform} not supported`);
+      }
+
+      video.platformStatus[platform].status = 'published';
+      video.platformStatus[platform].error = null;
       await video.save();
 
       res.json({ success: true, platform, result });
 
     } catch (uploadError) {
       console.error(`${platform} upload error:`, uploadError);
-      video.platformStatus[platform].status = 'failed';
-      video.platformStatus[platform].error = uploadError.message;
-      await video.save();
+      if (video && video.platformStatus && video.platformStatus[platform]) {
+        video.platformStatus[platform].status = 'failed';
+        video.platformStatus[platform].error = uploadError.message;
+        await video.save();
+      }
       res.status(500).json({ error: uploadError.message });
     }
 
