@@ -263,10 +263,35 @@ router.post('/save-video', validateInstagramAuth, async (req, res) => {
     if (!req.body.cloudinaryUrl) {
       return res.status(400).json({ error: 'Cloudinary URL is required' });
     }
-    await createAndUpload(req, res);
+
+    // 1. Send immediate success response to prevent timeout
+    res.status(202).json({
+      success: true,
+      message: 'Video processing started in background',
+      status: 'processing'
+    });
+
+    // 2. Create a mock response object for the controller
+    const mockRes = {
+      status: (code) => ({
+        json: (data) => console.log(`[Background] Status ${code}:`, data),
+        send: (data) => console.log(`[Background] Status ${code}:`, data)
+      }),
+      json: (data) => console.log('[Background] JSON:', data),
+      headersSent: false
+    };
+
+    // 3. Run the heavy lifting in the background
+    // We don't await this, so the main request finishes immediately
+    createAndUpload(req, mockRes).catch(err => {
+      console.error('Background processing error:', err);
+    });
+
   } catch (error) {
     console.error('Error in save-video route:', error);
-    res.status(500).json({ error: error.message });
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message });
+    }
   }
 });
 
