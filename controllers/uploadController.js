@@ -11,7 +11,238 @@ import fs from 'fs';
 import path from 'path';
 import { downloadFile } from '../utils/fileDownloader.js';
 
+// New function to save metadata only (Step 1 of Client-Side Orchestration)
+export const saveVideoMetadata = async (req, res) => {
+  try {
+    const uid = req.cookies?.uid || 'dev-user-' + Date.now();
+    const {
+      cloudinaryUrl,
+      title = '',
+      description = '',
+      publishTime,
+      platforms: platformsJson,
+      privacyStatus = 'private',
+      videoType = 'long'
+    } = req.body;
+
+    if (!cloudinaryUrl) {
+      return res.status(400).json({ error: 'Cloudinary URL is required' });
+    }
+
+    const platforms = JSON.parse(platformsJson || '{}');
+    const selectedPlatforms = Object.entries(platforms)
+      .filter(([_, isSelected]) => isSelected)
+      .map(([platform]) => platform);
+
+    if (selectedPlatforms.length === 0) {
+      return res.status(400).json({ error: 'No platforms selected' });
+    }
+
+    // Initialize platform statuses
+    const platformStatus = {
+      youtube: { connected: false, status: 'not_selected', error: null },
+      instagram: { connected: false, status: 'not_selected', error: null },
+      facebook: { connected: false, status: 'not_selected', error: null },
+      tiktok: { connected: false, status: 'not_selected', error: null }
+    };
+
+    // Check connections (fast checks only)
+    for (const [platform, isSelected] of Object.entries(platforms)) {
+      if (isSelected) {
+        platformStatus[platform].status = 'pending';
+        // Basic connection check logic (reused)
+        switch (platform) {
+          case 'youtube':
+            const ytUser = await User.findOne({ _id: uid, refreshToken: { $exists: true } });
+            platformStatus.youtube.connected = !!ytUser;
+            break;
+          case 'instagram':
+            const igUser = await User.findById(uid).select('instagram');
+            platformStatus.instagram.connected = !!(igUser?.instagram?.accountId && igUser?.instagram?.accessToken);
+            break;
+          case 'facebook':
+            const fbUser = await User.findById(uid).select('instagram');
+            platformStatus.facebook.connected = !!(fbUser?.instagram?.accessToken && fbUser?.instagram?.pageId);
+            break;
+          case 'tiktok':
+            const ttUser = await User.findById(uid).select('tiktok');
+            platformStatus.tiktok.connected = !!(ttUser?.tiktok?.accessToken);
+            break;
+        }
+      }
+    }
+
+    const video = new VideoSchedule({
+      userId: uid,
+      platform: selectedPlatforms.length > 1 ? 'multi' : selectedPlatforms[0],
+      title: title || 'Untitled',
+      description: description || '',
+      scheduledAt: publishTime ? new Date(publishTime) : new Date(),
+      status: 'processing',
+      mediaUrl: cloudinaryUrl, // Store Cloudinary URL
+      platformStatus
+    });
+
+    await video.save();
+
+    res.json({
+      success: true,
+      video: {
+        _id: video._id,
+        platformStatus: video.platformStatus,
+        selectedPlatforms
+      }
+    });
+
+  } catch (error) {
+    console.error('Error saving video metadata:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// New function to process a SINGLE platform (Step 2 of Client-Side Orchestration)
+export const processPlatformUpload = async (req, res) => {
+  let tmpDir = '';
+  try {
+    const { videoId, platform } = req.body;
+    const uid = req.cookies?.uid || 'dev-user-' + Date.now();
+
+    if (!videoId || !platform) {
+      return res.status(400).json({ error: 'Video ID and platform are required' });
+    }
+
+    const video = await VideoSchedule.findOne({ _id: videoId, userId: uid });
+    if (!video) {
+      return res.status(404).json({ error: 'Video not found' });
+    }
+
+    if (!video.mediaUrl) {
+      return res.status(400).json({ error: 'Video has no media URL' });
+    }
+
+    // Create temp directory
+    const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(path.dirname(import.meta.url.replace('file://', '')), '../temp');
+    if (!fs.existsSync(baseTmpDir)) {
+      try { fs.mkdirSync(baseTmpDir, { recursive: true }); } catch (e) { /* ignore */ }
+    }
+    tmpDir = path.join(baseTmpDir, `process_${platform}_${Date.now()}`);
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+
+    // Download video
+    log(`Downloading video for ${platform}...`);
+    const tempFilePath = path.join(tmpDir, 'video.mp4');
+    await downloadFile(video.mediaUrl, tempFilePath);
+
+    // Process Upload
+    let result = null;
+    log(`Starting upload to ${platform}...`);
+
+    try {
+      switch (platform) {
+        case 'youtube':
+          result = await uploadToYouTube(uid, tempFilePath, {
+            title: video.title,
+            description: video.description,
+            privacyStatus: 'private', // Default to private for safety
+            publishAt: video.scheduledAt,
+            videoType: 'long'
+          });
+          if (result?.videoId) {
+            video.platformStatus.youtube.status = 'published';
+            video.platformStatus.youtube.videoId = result.videoId;
+            video.platformStatus.youtube.thumbnailUrl = result.thumbnailUrl;
+            video.youtubeVideoId = result.videoId;
+          }
+          break;
+
+        case 'instagram':
+          // Verify session first
+          const igSession = await InstagramService.verifySession(uid);
+          if (!igSession) throw new Error('Instagram session invalid');
+
+          result = await InstagramService.uploadToInstagram(uid, tempFilePath, {
+            title: video.title,
+            description: video.description,
+            publishTime: video.scheduledAt,
+            userId: uid,
+            mediaType: 'REELS',
+            ignoreThumbnail: true,
+            multiPlatform: false // We are processing singly now
+          });
+          if (result?.id) {
+            video.platformStatus.instagram.status = 'published';
+            video.platformStatus.instagram.mediaId = result.id;
+            video.instagramMediaId = result.id;
+          }
+          break;
+
+        case 'facebook':
+          result = await uploadToFacebook(uid, tempFilePath, {
+            title: video.title,
+            description: video.description,
+            publishTime: video.scheduledAt
+          });
+          if (result?.id) {
+            video.platformStatus.facebook.status = 'published';
+            video.platformStatus.facebook.postId = result.id;
+            video.facebookPostId = result.id;
+          }
+          break;
+
+        case 'tiktok':
+          result = await uploadToTikTok(uid, tempFilePath, {
+            title: video.title,
+            description: video.description
+          });
+          if (result?.status === 'success') {
+            video.platformStatus.tiktok.status = 'published'; // or 'draft'
+            video.platformStatus.tiktok.videoId = result.publishId;
+            video.tiktokData = {
+              status: 'redirect',
+              url: result.url,
+              message: result.message
+            };
+          }
+          break;
+
+        default:
+          throw new Error(`Unknown platform: ${platform}`);
+      }
+
+      // Update overall status if all selected platforms are done
+      // (This is a bit tricky since we don't know if others failed, but we can check DB)
+      // For now, just save this platform's success
+      await video.save();
+
+      res.json({ success: true, platform, result });
+
+    } catch (uploadError) {
+      console.error(`${platform} upload error:`, uploadError);
+      video.platformStatus[platform].status = 'failed';
+      video.platformStatus[platform].error = uploadError.message;
+      await video.save();
+      res.status(500).json({ error: uploadError.message });
+    }
+
+  } catch (error) {
+    console.error('Process platform error:', error);
+    res.status(500).json({ error: error.message });
+  } finally {
+    // Clean up
+    try {
+      if (tmpDir && fs.existsSync(tmpDir)) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } catch (e) { console.error('Cleanup error:', e); }
+  }
+};
+
 export const createAndUpload = async (req, res) => {
+  // Legacy function - keeping for reference or fallback, but logic is largely duplicated.
+  // ... (existing code) ...
+
   let tmpDir = '';
   try {
     // For development, use a default user ID if not authenticated

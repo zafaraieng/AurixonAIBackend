@@ -19,7 +19,9 @@ import {
   createAndUpload,
   listUploads,
   deleteUpload,
-  editUpload
+  editUpload,
+  saveVideoMetadata,
+  processPlatformUpload
 } from '../controllers/uploadController.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -256,6 +258,10 @@ const uploadFields = upload.fields([
   { name: 'file', maxCount: 1 },
   { name: 'thumbnail', maxCount: 1 }
 ]);
+
+// New routes for Client-Side Orchestration
+router.post('/save-metadata', validateInstagramAuth, saveVideoMetadata);
+router.post('/process-platform', validateInstagramAuth, processPlatformUpload);
 
 // Route for Cloudinary URL submission (JSON only, no Multer)
 router.post('/save-video', validateInstagramAuth, async (req, res) => {
