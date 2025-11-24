@@ -159,6 +159,7 @@ export const processPlatformUpload = async (req, res) => {
 // Async background processing function
 async function processUploadAsync(videoId, platform, privacyStatus, videoType, uid) {
   let stage = 'init';
+  let tmpDir = '';
   try {
     const video = await VideoSchedule.findOne({ _id: videoId, userId: uid });
     if (!video) {
@@ -170,34 +171,33 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
       throw new Error('No media URL found for video');
     }
 
-    const needsStreaming = ['youtube', 'tiktok'].includes(platform);
-    let videoStream = null;
-    let videoSize = 0;
+    const needsDownload = ['youtube', 'tiktok'].includes(platform);
+    let tempFilePath = '';
 
-    stage = 'download_stream';
-    if (needsStreaming) {
-      log(`Fetching video stream from ${videoUrl}`);
-      const response = await fetch(videoUrl);
-      if (!response.ok) {
-        throw new Error(`Failed to fetch video: ${response.statusText}`);
+    stage = 'download';
+    if (needsDownload) {
+      // Create temp directory
+      const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(__dirname, '../temp');
+      if (!fs.existsSync(baseTmpDir)) {
+        try { fs.mkdirSync(baseTmpDir, { recursive: true }); } catch (e) { /* ignore */ }
+      }
+      tmpDir = path.join(baseTmpDir, 'tmp_proc_' + Date.now());
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
       }
 
-      videoSize = Number(response.headers.get('content-length'));
+      const originalName = 'video.mp4';
+      tempFilePath = path.join(tmpDir, originalName);
+      log(`Downloading video from ${videoUrl} to ${tempFilePath}`);
 
-      // Wrap in PassThrough to ensure standard Node stream compatibility
-      videoStream = new PassThrough();
-      response.body.pipe(videoStream);
+      // Use the robust downloadFile utility
+      await downloadFile(videoUrl, tempFilePath);
 
-      if (!videoSize) {
-        try {
-          const headResponse = await fetch(videoUrl, { method: 'HEAD' });
-          videoSize = Number(headResponse.headers.get('content-length'));
-        } catch (e) {
-          console.warn('Could not determine video size:', e);
-        }
+      const stats = fs.statSync(tempFilePath);
+      log(`Downloaded file size: ${stats.size} bytes`);
+      if (stats.size === 0) {
+        throw new Error('Downloaded video file is empty');
       }
-
-      log(`Video stream ready. Size: ${videoSize} bytes`);
     }
 
     stage = 'upload_' + platform;
@@ -206,13 +206,13 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
     switch (platform) {
       case 'youtube':
         log('Starting YouTube upload...');
-        result = await uploadToYouTube(uid, null, {
+        // Pass filePath instead of stream
+        result = await uploadToYouTube(uid, tempFilePath, {
           title: video.title,
           description: video.description,
           privacyStatus,
           publishAt: video.scheduledAt,
-          videoType,
-          videoStream
+          videoType
         });
         video.platformStatus.youtube = {
           connected: true,
@@ -253,11 +253,10 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
 
       case 'tiktok':
         log('Starting TikTok upload...');
-        const ttResult = await uploadToTikTok(uid, null, {
+        // Pass filePath instead of stream
+        const ttResult = await uploadToTikTok(uid, tempFilePath, {
           title: video.title,
-          description: video.description,
-          videoStream,
-          videoSize
+          description: video.description
         });
         video.platformStatus.tiktok = {
           connected: true,
@@ -284,6 +283,13 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
     } catch (dbError) {
       console.error('Error updating video status:', dbError);
     }
+  } finally {
+    // Clean up
+    try {
+      if (tmpDir && fs.existsSync(tmpDir)) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } catch (e) { console.error('Cleanup error:', e); }
   }
 }
 
