@@ -39,7 +39,10 @@ export const uploadToTikTok = async (userId, filePath, options) => {
     let fileSize;
     let fileStream;
 
-    if (options.videoStream && options.videoSize) {
+    if (options.videoBuffer) {
+      fileSize = options.videoSize; // Must be passed with buffer
+      fileStream = options.videoBuffer; // Buffer acts as body
+    } else if (options.videoStream && options.videoSize) {
       fileSize = options.videoSize;
       fileStream = options.videoStream;
     } else {

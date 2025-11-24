@@ -46,8 +46,8 @@ export async function uploadToYouTube(userId, filePath, meta = {}) {
       thumbnailPath
     } = meta;
 
-    // Upload the video first (accept either a stream or a file path)
-    const mediaBody = meta.videoStream || fs.createReadStream(filePath);
+    // Upload the video first (accept either a buffer, stream or a file path)
+    const mediaBody = meta.videoBuffer || meta.videoStream || fs.createReadStream(filePath);
 
     const videoUploadResponse = await youtube.videos.insert({
       part: 'snippet,status',

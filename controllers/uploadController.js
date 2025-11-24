@@ -200,18 +200,14 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
     switch (platform) {
       case 'youtube':
         log('Starting YouTube upload...');
-        // Pass stream (buffer converted to stream) or buffer directly if service supports it
-        // youtubeService expects stream or path. Let's make a stream from buffer.
-        const { Readable } = await import('stream');
-        const bufferStream = Readable.from(videoBuffer);
-
+        // Pass Buffer directly - googleapis handles it better than streams
         result = await uploadToYouTube(uid, null, {
           title: video.title,
           description: video.description,
           privacyStatus,
           publishAt: video.scheduledAt,
           videoType,
-          videoStream: bufferStream // Pass buffer as stream
+          videoBuffer // Pass buffer directly
         });
         video.platformStatus.youtube = {
           connected: true,
@@ -252,14 +248,11 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
 
       case 'tiktok':
         log('Starting TikTok upload...');
-        // TikTok service expects stream or path.
-        const { Readable: ReadableTT } = await import('stream');
-        const bufferStreamTT = ReadableTT.from(videoBuffer);
-
+        // Pass Buffer directly
         const ttResult = await uploadToTikTok(uid, null, {
           title: video.title,
           description: video.description,
-          videoStream: bufferStreamTT,
+          videoBuffer, // Pass buffer directly
           videoSize
         });
         video.platformStatus.tiktok = {
