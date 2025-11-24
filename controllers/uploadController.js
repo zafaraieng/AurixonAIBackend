@@ -126,18 +126,24 @@ export const processPlatformUpload = async (req, res) => {
     video.platformStatus[platform].status = 'processing';
     await video.save();
 
-    // RESPOND IMMEDIATELY to avoid timeout
+    // AWAIT the upload to ensure process isn't killed
+    // With maxDuration: 60s, this should complete for most short videos
+    await processUploadAsync(videoId, platform, privacyStatus, videoType, uid);
+
+    // Fetch updated video to return final status
+    const updatedVideo = await VideoSchedule.findOne({ _id: videoId });
+    const status = updatedVideo.platformStatus[platform];
+
+    if (status.status === 'failed') {
+      throw new Error(status.error || 'Upload failed');
+    }
+
     res.json({
       success: true,
       platform,
-      status: 'processing',
-      message: 'Upload started. Check /api/list for updates.'
+      result: status
     });
 
-    // Continue processing in background (fire-and-forget)
-    processUploadAsync(videoId, platform, privacyStatus, videoType, uid).catch(err => {
-      console.error('Background upload error:', err);
-    });
   } catch (error) {
     console.error(`Process platform ${platform} error:`, error);
     res.status(500).json({

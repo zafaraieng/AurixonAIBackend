@@ -31,5 +31,10 @@
   ],
   "env": {
     "NODE_ENV": "production"
+  },
+  "functions": {
+    "api/**/*": {
+      "maxDuration": 60
+    }
   }
 }
