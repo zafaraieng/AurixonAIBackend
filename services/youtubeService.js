@@ -19,8 +19,8 @@ export async function getYouTubeClient(refreshToken) {
  */
 export async function uploadToYouTube(userId, filePath, meta = {}) {
   try {
-    // Validate file path
-    if (!filePath || !fs.existsSync(filePath)) {
+    // Validate that we have either a file path or a readable stream
+    if (!meta.videoStream && (!filePath || !fs.existsSync(filePath))) {
       throw new Error(`Video file not found at path: ${filePath}`);
     }
 
@@ -46,7 +46,9 @@ export async function uploadToYouTube(userId, filePath, meta = {}) {
       thumbnailPath
     } = meta;
 
-    // Upload the video first
+    // Upload the video first (accept either a stream or a file path)
+    const mediaBody = meta.videoStream || fs.createReadStream(filePath);
+
     const videoUploadResponse = await youtube.videos.insert({
       part: 'snippet,status',
       requestBody: {
@@ -60,7 +62,7 @@ export async function uploadToYouTube(userId, filePath, meta = {}) {
         }
       },
       media: {
-        body: meta.videoStream || fs.createReadStream(filePath)
+        body: mediaBody
       }
     });
 

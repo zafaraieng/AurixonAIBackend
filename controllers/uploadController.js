@@ -12,6 +12,7 @@ import path from 'path';
 import { downloadFile } from '../utils/fileDownloader.js';
 import { fileURLToPath } from 'url';
 import fetch from 'node-fetch';
+import { PassThrough } from 'stream';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
