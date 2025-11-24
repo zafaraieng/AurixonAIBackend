@@ -180,7 +180,10 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
       }
 
       videoSize = Number(response.headers.get('content-length'));
-      videoStream = response.body;
+
+      // Wrap in PassThrough to ensure standard Node stream compatibility
+      videoStream = new PassThrough();
+      response.body.pipe(videoStream);
 
       if (!videoSize) {
         try {
