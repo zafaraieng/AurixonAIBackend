@@ -159,7 +159,6 @@ export const processPlatformUpload = async (req, res) => {
 // Async background processing function
 async function processUploadAsync(videoId, platform, privacyStatus, videoType, uid) {
   let stage = 'init';
-  let tmpDir = '';
   try {
     const video = await VideoSchedule.findOne({ _id: videoId, userId: uid });
     if (!video) {
@@ -172,31 +171,26 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
     }
 
     const needsDownload = ['youtube', 'tiktok'].includes(platform);
-    let tempFilePath = '';
+    let videoBuffer = null;
+    let videoSize = 0;
 
-    stage = 'download';
+    stage = 'download_buffer';
     if (needsDownload) {
-      // Create temp directory
-      const baseTmpDir = process.env.VERCEL ? '/tmp' : path.join(__dirname, '../temp');
-      if (!fs.existsSync(baseTmpDir)) {
-        try { fs.mkdirSync(baseTmpDir, { recursive: true }); } catch (e) { /* ignore */ }
-      }
-      tmpDir = path.join(baseTmpDir, 'tmp_proc_' + Date.now());
-      if (!fs.existsSync(tmpDir)) {
-        fs.mkdirSync(tmpDir, { recursive: true });
+      log(`Fetching video into memory from ${videoUrl}`);
+      const response = await fetch(videoUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch video: ${response.statusText}`);
       }
 
-      const originalName = 'video.mp4';
-      tempFilePath = path.join(tmpDir, originalName);
-      log(`Downloading video from ${videoUrl} to ${tempFilePath}`);
+      const arrayBuffer = await response.arrayBuffer();
+      videoBuffer = Buffer.from(arrayBuffer);
+      videoSize = videoBuffer.length;
 
-      // Use the robust downloadFile utility
-      await downloadFile(videoUrl, tempFilePath);
+      log(`Video buffered in memory. Size: ${videoSize} bytes`);
 
-      const stats = fs.statSync(tempFilePath);
-      log(`Downloaded file size: ${stats.size} bytes`);
-      if (stats.size === 0) {
-        throw new Error('Downloaded video file is empty');
+      // Safety check for Vercel memory limit (approx 1GB total, safe limit ~250MB for buffer)
+      if (videoSize > 250 * 1024 * 1024) {
+        throw new Error(`Video too large for serverless upload (${(videoSize / 1024 / 1024).toFixed(2)}MB). Max 250MB.`);
       }
     }
 
@@ -206,13 +200,18 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
     switch (platform) {
       case 'youtube':
         log('Starting YouTube upload...');
-        // Pass filePath instead of stream
-        result = await uploadToYouTube(uid, tempFilePath, {
+        // Pass stream (buffer converted to stream) or buffer directly if service supports it
+        // youtubeService expects stream or path. Let's make a stream from buffer.
+        const { Readable } = await import('stream');
+        const bufferStream = Readable.from(videoBuffer);
+
+        result = await uploadToYouTube(uid, null, {
           title: video.title,
           description: video.description,
           privacyStatus,
           publishAt: video.scheduledAt,
-          videoType
+          videoType,
+          videoStream: bufferStream // Pass buffer as stream
         });
         video.platformStatus.youtube = {
           connected: true,
@@ -253,10 +252,15 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
 
       case 'tiktok':
         log('Starting TikTok upload...');
-        // Pass filePath instead of stream
-        const ttResult = await uploadToTikTok(uid, tempFilePath, {
+        // TikTok service expects stream or path.
+        const { Readable: ReadableTT } = await import('stream');
+        const bufferStreamTT = ReadableTT.from(videoBuffer);
+
+        const ttResult = await uploadToTikTok(uid, null, {
           title: video.title,
-          description: video.description
+          description: video.description,
+          videoStream: bufferStreamTT,
+          videoSize
         });
         video.platformStatus.tiktok = {
           connected: true,
@@ -285,11 +289,7 @@ async function processUploadAsync(videoId, platform, privacyStatus, videoType, u
     }
   } finally {
     // Clean up
-    try {
-      if (tmpDir && fs.existsSync(tmpDir)) {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      }
-    } catch (e) { console.error('Cleanup error:', e); }
+    // No disk cleanup needed as files are processed in memory
   }
 }
 
