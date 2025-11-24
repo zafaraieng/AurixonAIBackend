@@ -20,7 +20,8 @@ const __dirname = path.dirname(__filename);
 // New function to save metadata only (Step 1 of Client-Side Orchestration)
 export const saveVideoMetadata = async (req, res) => {
   try {
-    const uid = req.cookies?.uid || 'dev-user-' + Date.now();
+    const uid = req.cookies?.uid;
+    if (!uid) return res.status(401).json({ error: 'Not authenticated' });
     const {
       cloudinaryUrl,
       title = '',
@@ -109,7 +110,8 @@ export const saveVideoMetadata = async (req, res) => {
 // New function to process a SINGLE platform (Step 2 of Client-Side Orchestration)
 export const processPlatformUpload = async (req, res) => {
   const { videoId, platform, privacyStatus = 'private', videoType = 'long' } = req.body;
-  const uid = req.cookies?.uid || 'dev-user-' + Date.now();
+  const uid = req.cookies?.uid;
+  if (!uid) return res.status(401).json({ error: 'Not authenticated' });
 
   if (!videoId || !platform) {
     return res.status(400).json({ error: 'Video ID and platform are required' });
@@ -292,7 +294,8 @@ export const createAndUpload = async (req, res) => {
   let tmpDir = '';
   try {
     // For development, use a default user ID if not authenticated
-    const uid = req.cookies?.uid || 'dev-user-' + Date.now();
+    const uid = req.cookies?.uid;
+    if (!uid) return res.status(401).json({ error: 'Not authenticated' });
 
     // Check for file OR cloudinaryUrl
     if (!req.files?.file && !req.body.cloudinaryUrl) {
