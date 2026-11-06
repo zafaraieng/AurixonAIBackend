@@ -43,13 +43,13 @@ class InstagramService {
   }
 
   // Build Facebook OAuth authorize URL
-  buildAuthorizeUrl() {
+  buildAuthorizeUrl(state) {
     const params = new URLSearchParams({
       client_id: this.appId,
       redirect_uri: this.redirectUri,
       scope: 'pages_show_list,pages_read_engagement,instagram_basic,instagram_content_publish,instagram_manage_comments,instagram_manage_insights,business_management',
       response_type: 'code',
-      state: Math.random().toString(36).substring(7)
+      state
     }).toString();
     return `https://www.facebook.com/v18.0/dialog/oauth?${params}`;
   }

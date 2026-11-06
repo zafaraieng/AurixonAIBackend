@@ -15,10 +15,10 @@ export const tiktokLogin = async (req, res) => {
     const state = generateOAuthState(userId);
     const authorizeUrl = buildTikTokAuthorizeUrl(state);
     
-    log('TikTok login initiated:', { userId, state });
+    log('TikTok login initiated');
     res.redirect(authorizeUrl);
   } catch (error) {
-    err('TikTok login error:', error);
+    err('TikTok login failed');
   res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=${encodeURIComponent(error.message)}`);
   }
 };
@@ -30,7 +30,7 @@ export const tiktokCallback = async (req, res) => {
     
     if (error) {
       const errorMsg = error_description || error_summary || error;
-      log('TikTok auth error:', { error, error_description, error_summary });
+      log('TikTok authorization was declined or failed');
   return res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=${encodeURIComponent(errorMsg)}`);
     }
     
@@ -46,45 +46,44 @@ export const tiktokCallback = async (req, res) => {
   return res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=OAuth state expired or invalid`);
     }
 
-    log('Verified OAuth state:', { originalUserId, state });
+    log('TikTok OAuth state verified');
 
     // Use the verified user ID from state instead of session
     const userId = originalUserId;
-    log('TikTok callback - Using verified user ID:', userId);
+    log('TikTok callback user resolved');
 
     // Find existing user
     const existingUser = await User.findById(userId).select('email tiktok');
     if (!existingUser) {
-      log('User not found in database:', userId);
+      log('TikTok callback user was not found');
   return res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=User not found`);
     }
 
-    log('Found user for TikTok callback:', { id: existingUser._id, email: existingUser.email });
+    log('TikTok callback matched an existing account');
     
     // Set the session to this user's ID to maintain consistency
-    res.cookie('uid', userId);
+    res.cookie('uid', userId, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 * 1000, signed: true });
 
     log('Found existing user, proceeding with TikTok connection');
 
-    log('Received TikTok callback with code:', code);
+
 
     // Exchange code for access token and update user
     let tokenResponse;
     try {
       tokenResponse = await exchangeCodeForToken(code);
-      log('Token response:', tokenResponse);
+
       
       if (!tokenResponse.access_token) {
         if (tokenResponse.error) {
-          throw new Error(`TikTok OAuth failed: ${tokenResponse.error_description || tokenResponse.error}`);
+          throw new Error('TikTok OAuth token exchange failed');
         }
         throw new Error('Failed to get access token');
       }
 
       // Get user profile info
       const userProfile = await fetchTikTokUserProfile(tokenResponse.access_token);
-      log('User profile:', userProfile);
-      log('Updating existing user:', userId);
+      log('TikTok profile retrieved; updating account');
       
       // Update existing user with TikTok credentials
       await User.findByIdAndUpdate(userId, {
@@ -103,12 +102,12 @@ export const tiktokCallback = async (req, res) => {
 
       // Verify the update
       const updatedUser = await User.findById(userId).select('tiktok');
-      log('Verification - Updated user TikTok data:', updatedUser?.tiktok);
+
 
       // Redirect back to frontend with success state
   res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?tiktok=connected`);
     } catch (error) {
-      err('TikTok callback error:', error);
+      err('TikTok callback failed');
   res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=tiktok_auth_failed`);
     }
   } catch (error) {
@@ -126,17 +125,17 @@ export const getTikTokStatus = async (req, res) => {
     }
 
     const userId = req.session.userId;
-    log('Checking TikTok status for user:', userId);
+    log('Checking TikTok connection status');
 
     const user = await User.findById(userId).select('tiktok email');
     if (!user) {
-      log('User not found:', userId);
+      log('TikTok status requested for missing account');
       // Clear invalid session
       res.clearCookie('uid');
       return res.status(404).json({ error: 'User not found' });
     }
 
-    log('Found user:', { id: user._id, email: user.email });
+    log('TikTok account record found');
 
     // Check all required TikTok fields
     const connected = !!(
@@ -241,11 +240,9 @@ function buildTikTokAuthorizeUrl(state) {
   const scopeString = scopes.join(',');
 
   log('Building TikTok authorize URL with params:', {
-    clientKey: process.env.TIKTOK_CLIENT_KEY,
     redirectUri,
     scopes,
     scopeString,
-    state
   });
 
   const queryParts = [
@@ -277,14 +274,7 @@ async function exchangeCodeForToken(code) {
   tokenBody.append('redirect_uri', redirectUri);
 
   // Log the request details for debugging (excluding sensitive data)
-  log('Token exchange request:', {
-    endpoint: tokenEndpoint,
-    client_key: process.env.TIKTOK_CLIENT_KEY,
-    code: code,
-    grant_type: 'authorization_code',
-    redirect_uri: redirectUri,
-    hasClientSecret: !!process.env.TIKTOK_CLIENT_SECRET
-  });
+  // Do not log OAuth request metadata or credentials.
 
   const response = await fetch(tokenEndpoint, {
     method: 'POST',
@@ -300,11 +290,10 @@ async function exchangeCodeForToken(code) {
   try {
     data = JSON.parse(text);
   } catch (e) {
-    log('Token exchange response (text):', text);
-    throw new Error(`Failed to parse token response: ${text}`);
+    throw new Error('Failed to parse TikTok token response');
   }
   
-  log('Token exchange response:', data);
+  // Token responses contain credentials; never log them.
 
   // TikTok v2 API returns errors in data.error object
   if (!response.ok || data.error || (data.data && data.data.error_code)) {
@@ -320,7 +309,7 @@ async function exchangeCodeForToken(code) {
     } else if (errorMessage.includes('redirect')) {
       throw new Error(`TikTok OAuth failed: Invalid redirect URI. Please check your app settings and ensure the callback URL matches exactly.`);
     } else {
-      throw new Error(`TikTok OAuth failed: ${errorMessage}`);
+      throw new Error('TikTok OAuth token exchange failed');
     }
   }
 
@@ -338,19 +327,17 @@ async function fetchTikTokUserProfile(accessToken) {
   });
 
   const text = await response.text();
-  log('Raw user profile response:', text);
   
   let data;
   try {
     data = JSON.parse(text);
-    log('User profile response:', data);
   } catch (e) {
-    throw new Error(`Failed to parse user profile response: ${text}`);
+    throw new Error('Failed to parse TikTok profile response');
   }
 
   // Only throw if there's an actual error
   if (!response.ok || (data.error && data.error.code !== 'ok')) {
-    throw new Error(`Failed to fetch user profile: ${data.error?.message || response.statusText}`);
+    throw new Error('Failed to fetch TikTok profile');
   }
 
   if (!data.data?.user) {
