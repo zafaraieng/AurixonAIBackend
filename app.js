@@ -123,33 +123,7 @@ app.use('/api/optimize', optimizeRoutes);
 app.use('/tiktok', tiktokRoutes);
 
 // Mount dedicated TikTok callback route
-app.get('/callback/tiktok', async (req, res, next) => {
-  log('TikTok callback received:', {
-    path: req.path,
-    query: req.query,
-    cookies: req.cookies,
-    headers: req.headers
-  });
-
-  // Set a temporary cookie to maintain session through the callback
-  if (!req.cookies?.uid && req.query.state) {
-    res.cookie('uid', req.query.state.split('_')[0], {
-      maxAge: 300000,
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
-    });
-  }
-
-  if (req.query.error) {
-    // Handle TikTok-provided error
-    const error = req.query.error_description || req.query.error;
-    log('TikTok auth error:', error);
-    return res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=${encodeURIComponent(error)}`);
-  }
-
-  next();
-}, tiktokCallback);
+app.get('/callback/tiktok', tiktokCallback);
 
 app.get('/', (req, res) => {
   res.send('Aurixon API is running');
