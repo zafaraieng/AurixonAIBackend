@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials.json
+kaggle.json
+
+# Uploads and temporary files
+uploads/
+temp/
+tmp/
+*.log
+
+# Binary tools
+chromaprint-fpcalc-1.5.1-windows-x86_64/
+fpcalc.exe
+
+# Vercel / deployment
+.vercel
+
+# IDE and OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Coverage and test artifacts
+coverage/
+.nyc_output/
