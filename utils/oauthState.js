@@ -1,10 +1,10 @@
-import { log } from '../utils/logger.js';
+import { randomBytes } from 'node:crypto';
 
 // Store state in memory (you might want to use Redis in production)
 const stateStore = new Map();
 
 export const generateOAuthState = (userId) => {
-    const state = Math.random().toString(36).substring(2);
+    const state = randomBytes(32).toString('hex');
     stateStore.set(state, {
         userId,
         timestamp: Date.now()
