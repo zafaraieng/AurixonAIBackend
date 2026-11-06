@@ -56,8 +56,8 @@ if (!process.env.PUBLIC_VIDEO_URL) {
   console.warn('WARNING: PUBLIC_VIDEO_URL is not set. Some endpoints (like /api/check-video) will return file paths only. Set PUBLIC_VIDEO_URL in production to serve public video URLs.');
 }
 
-if (!process.env.SESSION_SECRET) {
-  console.error('FATAL: SESSION_SECRET environment variable is required. Refusing to start with a default secret.');
+if (!process.env.SESSION_SECRET || process.env.SESSION_SECRET.length < 32) {
+  console.error('FATAL: SESSION_SECRET must be set to a random value of at least 32 characters. Refusing to start with an insecure secret.');
   process.exit(1);
 }
 
