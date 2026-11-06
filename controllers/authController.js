@@ -91,7 +91,7 @@ export const googleCallback = async (req, res) => {
   const clientUrl = (keys.clientUrl || process.env.CLIENT_URL || 'https://aurixon.vercel.app').replace(/\/$/, '');
   res.redirect(`${clientUrl}/dashboard?google=connected`);
   } catch (e) {
-    err('googleCallback error', e);
+    err('Google OAuth callback failed');
     res.status(500).send('Auth failed');
   }
 };
