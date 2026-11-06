@@ -38,7 +38,6 @@ const corsOptions = {
 };
 import { tiktokCallback } from './controllers/tiktokController.js';
 import { log } from './utils/logger.js';
-// Remove direct import of tiktokCallback as it's now handled through routes
 import fs from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -57,14 +56,19 @@ if (!process.env.PUBLIC_VIDEO_URL) {
   console.warn('WARNING: PUBLIC_VIDEO_URL is not set. Some endpoints (like /api/check-video) will return file paths only. Set PUBLIC_VIDEO_URL in production to serve public video URLs.');
 }
 
+if (!process.env.SESSION_SECRET) {
+  console.error('FATAL: SESSION_SECRET environment variable is required. Refusing to start with a default secret.');
+  process.exit(1);
+}
+
 // Middleware
 app.use(cors(corsOptions));
 
 // Handle preflight OPTIONS requests explicitly
 app.options('*', cors(corsOptions));
 
-// Cookie parser middleware with proper secret
-app.use(cookieParser(process.env.SESSION_SECRET || 'your-secret-key'));
+// Cookie parser — SESSION_SECRET is mandatory (checked above)
+app.use(cookieParser(process.env.SESSION_SECRET));
 
 // Import and use session middleware
 import { sessionMiddleware } from './middleware/session.js';
@@ -108,8 +112,6 @@ app.get('/api/check-video/:filename', (req, res) => {
   }
 });
 
-// Removed test endpoint
-
 // Routes
 app.use('/auth', authRoutes);
 app.use('/api', uploadRoutes);
@@ -150,7 +152,7 @@ app.get('/callback/tiktok', async (req, res, next) => {
 }, tiktokCallback);
 
 app.get('/', (req, res) => {
-  res.send('YouTube Scheduler API is running');
+  res.send('Aurixon API is running');
 });
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
