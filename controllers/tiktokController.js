@@ -30,7 +30,7 @@ export const tiktokCallback = async (req, res) => {
     
     if (error) {
       const errorMsg = error_description || error_summary || error;
-      log('TikTok auth error:', { error, error_description, error_summary });
+      log('TikTok authorization was declined or failed');
   return res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=${encodeURIComponent(errorMsg)}`);
     }
     
@@ -55,14 +55,14 @@ export const tiktokCallback = async (req, res) => {
     // Find existing user
     const existingUser = await User.findById(userId).select('email tiktok');
     if (!existingUser) {
-      log('User not found in database:', userId);
+      log('TikTok callback user was not found');
   return res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=User not found`);
     }
 
-    log('Found user for TikTok callback:', { id: existingUser._id, email: existingUser.email });
+    log('TikTok callback matched an existing account');
     
     // Set the session to this user's ID to maintain consistency
-    res.cookie('uid', userId);
+    res.cookie('uid', userId, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: 7 * 24 * 60 * 60 * 1000, signed: true });
 
     log('Found existing user, proceeding with TikTok connection');
 
@@ -83,8 +83,7 @@ export const tiktokCallback = async (req, res) => {
 
       // Get user profile info
       const userProfile = await fetchTikTokUserProfile(tokenResponse.access_token);
-      log('User profile:', userProfile);
-      log('Updating existing user:', userId);
+      log('TikTok profile retrieved; updating account');
       
       // Update existing user with TikTok credentials
       await User.findByIdAndUpdate(userId, {
