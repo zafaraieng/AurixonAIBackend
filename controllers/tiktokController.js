@@ -18,7 +18,7 @@ export const tiktokLogin = async (req, res) => {
     log('TikTok login initiated');
     res.redirect(authorizeUrl);
   } catch (error) {
-    err('TikTok login error:', error);
+    err('TikTok login failed');
   res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=${encodeURIComponent(error.message)}`);
   }
 };
@@ -76,7 +76,7 @@ export const tiktokCallback = async (req, res) => {
       
       if (!tokenResponse.access_token) {
         if (tokenResponse.error) {
-          throw new Error(`TikTok OAuth failed: ${tokenResponse.error_description || tokenResponse.error}`);
+          throw new Error('TikTok OAuth token exchange failed');
         }
         throw new Error('Failed to get access token');
       }
@@ -107,7 +107,7 @@ export const tiktokCallback = async (req, res) => {
       // Redirect back to frontend with success state
   res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?tiktok=connected`);
     } catch (error) {
-      err('TikTok callback error:', error);
+      err('TikTok callback failed');
   res.redirect(`${process.env.CLIENT_URL || 'https://aurixon.vercel.app'}/dashboard?error=tiktok_auth_failed`);
     }
   } catch (error) {
@@ -129,13 +129,13 @@ export const getTikTokStatus = async (req, res) => {
 
     const user = await User.findById(userId).select('tiktok email');
     if (!user) {
-      log('User not found:', userId);
+      log('TikTok status requested for missing account');
       // Clear invalid session
       res.clearCookie('uid');
       return res.status(404).json({ error: 'User not found' });
     }
 
-    log('Found user:', { id: user._id, email: user.email });
+    log('TikTok account record found');
 
     // Check all required TikTok fields
     const connected = !!(
@@ -274,12 +274,7 @@ async function exchangeCodeForToken(code) {
   tokenBody.append('redirect_uri', redirectUri);
 
   // Log the request details for debugging (excluding sensitive data)
-  log('Token exchange request:', {
-    endpoint: tokenEndpoint,
-    grant_type: 'authorization_code',
-    redirect_uri: redirectUri,
-    hasClientSecret: !!process.env.TIKTOK_CLIENT_SECRET
-  });
+  // Do not log OAuth request metadata or credentials.
 
   const response = await fetch(tokenEndpoint, {
     method: 'POST',
@@ -298,7 +293,7 @@ async function exchangeCodeForToken(code) {
     throw new Error('Failed to parse TikTok token response');
   }
   
-  log('Token exchange response:', data);
+  // Token responses contain credentials; never log them.
 
   // TikTok v2 API returns errors in data.error object
   if (!response.ok || data.error || (data.data && data.data.error_code)) {
