@@ -125,7 +125,7 @@ Detailed OpenAPI-style documentation is planned.
 - `SESSION_SECRET` is **required**; the server refuses to start without it.
 - OAuth client secrets and API keys must live only in environment variables.
 - `.gitignore` blocks `.env`, keys, and credential files.
-- A previous `.env` commit has been removed from the working tree; history cleanup (force-push after `git filter-repo`) should still be performed by the repository owner.
+- Repository branch history was rewritten on 2026-11-06 after historical credential exposure. GitHub Support purge of cached views and the closed pre-rewrite pull request is still pending.
 
 ## Testing
 
