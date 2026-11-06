@@ -15,7 +15,8 @@ test('OAuth state round-trips a valid user ID', () => {
 test('OAuth state rejects tampering', () => {
   const state = generateOAuthState('507f1f77bcf86cd799439011');
   const [payload, signature] = state.split('.');
-  const tampered = `${payload}.${signature.slice(0, -1)}x`;
+  const alteredPayload = `${payload.slice(0, -1)}${payload.endsWith('A') ? 'B' : 'A'}`;
+  const tampered = `${alteredPayload}.${signature}`;
   assert.equal(verifyOAuthState(tampered), null);
 });
 
