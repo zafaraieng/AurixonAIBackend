@@ -1,11 +1,14 @@
 import InstagramService from '../services/instagramService.js';
 import User from '../models/User.js';
 import { log, err } from '../utils/logger.js';
+import { generateOAuthState, verifyOAuthState } from '../utils/oauthState.js';
 
 // Redirect user to Facebook OAuth
 export const facebookLogin = async (req, res) => {
   try {
-    const authorizeUrl = InstagramService.buildAuthorizeUrl();
+    if (!req.session?.isAuthenticated) return res.status(401).json({ error: 'Not authenticated' });
+    const state = generateOAuthState(req.session.userId);
+    const authorizeUrl = InstagramService.buildAuthorizeUrl(state);
     res.redirect(authorizeUrl);
   } catch (error) {
     err('Facebook login error:', error);
@@ -16,7 +19,11 @@ export const facebookLogin = async (req, res) => {
 // Handle Facebook OAuth callback
 export const facebookCallback = async (req, res) => {
   try {
-    const { code } = req.query;
+    const { code, state } = req.query;
+    const stateUserId = verifyOAuthState(state);
+    if (!stateUserId || stateUserId !== req.cookies?.uid) {
+      return res.status(400).json({ error: 'Invalid OAuth state. Please restart account connection.' });
+    }
     
     if (!code) {
       return res.status(400).json({ error: 'Authorization code required' });
