@@ -113,25 +113,8 @@ export const logout = async (req, res) => {
   res.json({ ok: true });
 };
 
-export const setInstagramCredentials = async (req, res) => {
-  try {
-    const uid = req.cookies?.uid;
-    if (!uid) return res.status(401).json({ error: 'Not authenticated' });
 
-    const { username, password } = req.body;
-    if (!username || !password) {
-      return res.status(400).json({ error: 'Username and password required' });
-    }
-
-    const user = await User.findByIdAndUpdate(uid, {
-      'instagramCredentials.username': username,
-      'instagramCredentials.password': password,
-      'instagramCredentials.lastLogin': new Date()
-    }, { new: true });
-
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('setInstagramCredentials error:', e);
-    res.status(500).json({ error: 'Failed to save Instagram credentials' });
-  }
+// Password-based Instagram credential collection is intentionally disabled.
+export const setInstagramCredentials = async (_req, res) => {
+  res.status(410).json({ error: 'Password-based Instagram login is disabled. Connect through the official Facebook OAuth flow.' });
 };
