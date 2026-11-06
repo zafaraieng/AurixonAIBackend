@@ -125,7 +125,7 @@ export const getTikTokStatus = async (req, res) => {
     }
 
     const userId = req.session.userId;
-    log('Checking TikTok status for user:', userId);
+    log('Checking TikTok connection status');
 
     const user = await User.findById(userId).select('tiktok email');
     if (!user) {
