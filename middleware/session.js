@@ -1,54 +1,26 @@
 import { log } from '../utils/logger.js';
 
-export const sessionMiddleware = async (req, res, next) => {
-    const uid = req.cookies?.uid;
-    const authHeader = req.headers.authorization;
-    
-    // Check both cookie and Authorization header
-    let userId = uid;
-    // Check for Bearer token in Authorization header
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        const tokenUserId = authHeader.split(' ')[1];
-        // Prefer token over cookie if available
-        if (tokenUserId) {
-            userId = tokenUserId;
-        }
+const OBJECT_ID_PATTERN = /^[a-f\d]{24}$/i;
+
+export const sessionMiddleware = (req, res, next) => {
+  // Only accept the uid cookie after cookie-parser has verified its signature.
+  // Discard legacy unsigned uid cookies instead of treating them as authentication.
+  const verifiedUid = req.signedCookies?.uid;
+  if (req.cookies) {
+    delete req.cookies.uid;
+    if (typeof verifiedUid === 'string' && OBJECT_ID_PATTERN.test(verifiedUid)) {
+      req.cookies.uid = verifiedUid;
     }
-    
-    // Validate userId format (assuming it's a MongoDB ObjectId-like string)
-    if (userId && (!userId.match(/^[a-f\d]{24}$/i) && !userId.match(/^\d+$/))) {
-        userId = undefined;
-    }
-    
-    // Add session info to req object
-    req.session = {
-        userId: userId,
-        isAuthenticated: !!userId
-    };
+  }
 
-    // Attach userId to request for easy access
-    req.userId = userId;
+  const userId = typeof verifiedUid === 'string' && OBJECT_ID_PATTERN.test(verifiedUid)
+    ? verifiedUid
+    : undefined;
 
-    // Debug logging with more context
-    log('Session middleware - User ID:', userId, {
-        hasAuthHeader: !!authHeader,
-        hasCookie: !!uid,
-        path: req.path,
-        method: req.method
-    });
+  req.session = { userId, isAuthenticated: Boolean(userId) };
+  req.userId = userId;
 
-    // Enhanced cookie setting
-    const originalSetCookie = res.cookie;
-    res.cookie = function(name, value, options = {}) {
-        const defaultOptions = {
-            httpOnly: true,
-            secure: true,
-            sameSite: 'none',
-            path: '/',
-            maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
-        };
-        return originalSetCookie.call(this, name, value, { ...defaultOptions, ...options });
-    };
-
-    next();
+  // Never log identifiers, authorization headers, cookies, or tokens.
+  log('Session checked', { authenticated: Boolean(userId), path: req.path, method: req.method });
+  next();
 };
